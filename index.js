@@ -1,62 +1,101 @@
 import express from "express";
 import fetch from "node-fetch";
+import dotenv from "dotenv";
+import TelegramBot from "node-telegram-bot-api";
 
+dotenv.config();
+
+// ===== ENV CHECK =====
+if (!process.env.TG_TOKEN) {
+  console.error("❌ TG_TOKEN missing");
+  process.exit(1);
+}
+
+if (!process.env.REPLICATE_API_TOKEN) {
+  console.error("❌ REPLICATE_API_TOKEN missing");
+  process.exit(1);
+}
+
+// ===== TELEGRAM =====
+const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
+
+// ===== EXPRESS (For Railway keepalive) =====
 const app = express();
-app.use(express.json());
+app.get("/", (req, res) => {
+  res.send("Pixlemorphic AI Bot is running 🚀");
+});
+app.listen(3000, () => {
+  console.log("🌐 HTTP server running on port 3000");
+});
 
-const TOKEN = process.env.TG_TOKEN;
-const TG_API = `https://api.telegram.org/bot${TOKEN}`;
+// ===== /start =====
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(
+    msg.chat.id,
+    "👋 Welcome to PIXLEMORPHIC AI\n\nSend me a prompt like:\n`a cyberpunk girl in rain`\n\nI will generate AI images for you."
+  );
+});
 
-app.post("/", async (req, res) => {
+// ===== HANDLE PROMPTS =====
+bot.on("message", async (msg) => {
+  const chatId = msg.chat.id;
+  const text = msg.text;
+
+  if (!text || text.startsWith("/")) return;
+
+  bot.sendMessage(chatId, "🎨 Generating image... please wait");
+
   try {
-    const msg = req.body.message;
+    const response = await fetch("https://api.replicate.com/v1/predictions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        version: "db21e45d3f7023c3f8ed38b1b3c2de142c8a3c6f2a7f5e87c7b5a4e2a9c6f4c7",
+        input: {
+          prompt: text
+        }
+      })
+    });
 
-    if (!msg) return res.sendStatus(200);
+    const prediction = await response.json();
 
-    const chatId = msg.chat.id;
-    const text = msg.text || "";
+    let imageUrl = null;
 
-    if (text === "/start") {
-      await fetch(`${TG_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: "🚀 PIXLEMORPHIC AI READY\n\nUse:\n/image prompt\n/credits\n/img2video",
-        }),
-      });
+    // wait for image
+    for (let i = 0; i < 20; i++) {
+      const check = await fetch(
+        `https://api.replicate.com/v1/predictions/${prediction.id}`,
+        {
+          headers: {
+            "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`
+          }
+        }
+      );
+      const result = await check.json();
+      if (result.status === "succeeded") {
+        imageUrl = result.output[0];
+        break;
+      }
+      await new Promise(r => setTimeout(r, 3000));
     }
 
-    if (text.startsWith("/image")) {
-      await fetch(`${TG_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: "🖼 Image generation started...\n(Flux API will be connected next)",
-        }),
-      });
+    if (!imageUrl) {
+      bot.sendMessage(chatId, "❌ Image generation failed. Try again.");
+      return;
     }
 
-    if (text === "/credits") {
-      await fetch(`${TG_API}/sendMessage`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          chat_id: chatId,
-          text: "💰 Credits: 100",
-        }),
-      });
-    }
+    await bot.sendPhoto(chatId, imageUrl, {
+      caption: `✨ PIXLEMORPHIC AI\nPrompt: ${text}`
+    });
 
-    res.sendStatus(200);
-  } catch (e) {
-    console.log(e);
-    res.sendStatus(200);
+  } catch (err) {
+    console.error(err);
+    bot.sendMessage(chatId, "⚠️ Server error. Please try again.");
   }
 });
-});
-const PORT = process.env.PORT || 3000
-app.listen(PORT, () => {
-  console.log("HTTP server running on", PORT)
-})
+
+// ===== BOT READY =====
+console.log("🤖 Pixlemorphic AI Bot Started");
