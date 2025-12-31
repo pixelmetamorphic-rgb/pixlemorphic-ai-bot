@@ -1,47 +1,43 @@
-import TelegramBot from "node-telegram-bot-api"
-import axios from "axios"
-import express from "express"
-import dotenv from "dotenv"
-dotenv.config()
+import express from "express";
+import fetch from "node-fetch";
 
-const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true })
-const app = express()
+const app = express();
+app.use(express.json());
+
+const BOT_TOKEN = process.env.BOT_TOKEN;
+
+app.post("/webhook", async (req, res) => {
+  try {
+    const message = req.body.message;
+    if (!message) return res.sendStatus(200);
+
+    const chatId = message.chat.id;
+    const text = message.text || "";
+
+    let reply = "👋 PIXLEMORPHIC AI\n\nUse:\n/image\n/video\n/credits";
+
+    if (text === "/start") {
+      reply = "🚀 PIXLEMORPHIC AI is LIVE!\n\nCommands:\n/image – Generate AI image\n/video – Generate AI video\n/credits – Check balance";
+    }
+
+    await fetch(`https://api.telegram.org/bot${BOT_TOKEN}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        chat_id: chatId,
+        text: reply
+      })
+    });
+
+    res.sendStatus(200);
+  } catch (e) {
+    console.error(e);
+    res.sendStatus(200);
+  }
+});
 
 app.get("/", (req, res) => {
-  res.send("Pixlemorphic AI Live 🚀")
-})
+  res.send("PIXLEMORPHIC AI running 🚀");
+});
 
-app.listen(3000)
-
-// START
-bot.onText(/\/start/, msg => {
-  bot.sendMessage(msg.chat.id,
-    "🚀 Pixlemorphic AI\n\nUse:\n/image prompt\n/video prompt"
-  )
-})
-
-// IMAGE GENERATION
-bot.onText(/\/image (.+)/, async (msg, match) => {
-  const res = await axios.post(
-    "https://api.pixverse.ai/generate",
-    { prompt: match[1] },
-    { headers: { Authorization: process.env.PIXVERSE_KEY } }
-  )
-
-  bot.sendPhoto(msg.chat.id, res.data.image)
-})
-
-// VIDEO GENERATION
-bot.onText(/\/video (.+)/, async (msg, match) => {
-  const res = await axios.post(
-    "https://api.lumalabs.ai/video",
-    {
-      prompt: match[1],
-      style: "cinematic",
-      resolution: "1080p"
-    },
-    { headers: { Authorization: process.env.LUMA_KEY } }
-  )
-
-  bot.sendVideo(msg.chat.id, res.data.video_url)
-})
+app.listen(3000, () => console.log("Bot running"));
