@@ -59,3 +59,7 @@ app.post("/", async (req, res) => {
 app.listen(process.env.PORT || 3000, () => {
   console.log("Bot running");
 });
+const PORT = process.env.PORT || 3000
+app.listen(PORT, () => {
+  console.log("HTTP server running on", PORT)
+})
