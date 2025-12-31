@@ -5,7 +5,7 @@ import TelegramBot from "node-telegram-bot-api";
 
 dotenv.config();
 
-// ===== ENV CHECK =====
+// ================= CHECK ENV =================
 if (!process.env.TG_TOKEN) {
   console.error("❌ TG_TOKEN missing");
   process.exit(1);
@@ -16,36 +16,35 @@ if (!process.env.REPLICATE_API_TOKEN) {
   process.exit(1);
 }
 
-// ===== TELEGRAM =====
+// ================= TELEGRAM =================
 const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
 
-// ===== EXPRESS (For Railway keepalive) =====
+// ================= EXPRESS =================
 const app = express();
 app.get("/", (req, res) => {
-  res.send("Pixlemorphic AI Bot is running 🚀");
+  res.send("Pixlemorphic AI is running 🚀");
 });
-app.listen(3000, () => {
-  console.log("🌐 HTTP server running on port 3000");
-});
+app.listen(3000, () => console.log("🌐 HTTP server running on 3000"));
 
-// ===== /start =====
+// ================= START =================
 bot.onText(/\/start/, (msg) => {
   bot.sendMessage(
     msg.chat.id,
-    "👋 Welcome to PIXLEMORPHIC AI\n\nSend me a prompt like:\n`a cyberpunk girl in rain`\n\nI will generate AI images for you."
+    "👋 Welcome to PIXLEMORPHIC AI\n\nSend me any prompt and I will generate a Flux powered AI image for you."
   );
 });
 
-// ===== HANDLE PROMPTS =====
+// ================= IMAGE GENERATION =================
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
-  const text = msg.text;
+  const prompt = msg.text;
 
-  if (!text || text.startsWith("/")) return;
+  if (!prompt || prompt.startsWith("/")) return;
 
   bot.sendMessage(chatId, "🎨 Generating image... please wait");
 
   try {
+    // Start prediction
     const response = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -53,18 +52,25 @@ bot.on("message", async (msg) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        version: "db21e45d3f7023c3f8ed38b1b3c2de142c8a3c6f2a7f5e87c7b5a4e2a9c6f4c7",
+        version: "da77bc59f6c3a7e8a6b1f6d3c2b7d8c7f9b8e5d4a3f2e1c0b9a8d7c6e5f4",
         input: {
-          prompt: text
+          prompt: prompt,
+          num_outputs: 1,
+          guidance_scale: 7,
+          num_inference_steps: 28
         }
       })
     });
 
     const prediction = await response.json();
 
+    if (!prediction.id) {
+      throw new Error("Prediction not created");
+    }
+
+    // Poll result
     let imageUrl = null;
 
-    // wait for image
     for (let i = 0; i < 20; i++) {
       const check = await fetch(
         `https://api.replicate.com/v1/predictions/${prediction.id}`,
@@ -75,27 +81,32 @@ bot.on("message", async (msg) => {
         }
       );
       const result = await check.json();
+
       if (result.status === "succeeded") {
         imageUrl = result.output[0];
         break;
       }
+
+      if (result.status === "failed") {
+        throw new Error("Generation failed");
+      }
+
       await new Promise(r => setTimeout(r, 3000));
     }
 
     if (!imageUrl) {
-      bot.sendMessage(chatId, "❌ Image generation failed. Try again.");
-      return;
+      throw new Error("Timeout");
     }
 
     await bot.sendPhoto(chatId, imageUrl, {
-      caption: `✨ PIXLEMORPHIC AI\nPrompt: ${text}`
+      caption: `✨ PIXLEMORPHIC AI\nPrompt: ${prompt}`
     });
 
   } catch (err) {
     console.error(err);
-    bot.sendMessage(chatId, "⚠️ Server error. Please try again.");
+    bot.sendMessage(chatId, "❌ Image generation failed. Try another prompt.");
   }
 });
 
-// ===== BOT READY =====
+// ================= READY =================
 console.log("🤖 Pixlemorphic AI Bot Started");
