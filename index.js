@@ -4,7 +4,7 @@ import fetch from "node-fetch";
 const app = express();
 app.use(express.json());
 
-const TOKEN = "8103000968:AAGwBRQlCEy1zBvPv8MjIzhrPC2PD8TY3ck";
+const TOKEN = process.env.TG_TOKEN;
 const TG_API = `https://api.telegram.org/bot${TOKEN}`;
 
 app.post("/", async (req, res) => {
