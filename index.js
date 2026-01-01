@@ -1,86 +1,84 @@
+import TelegramBot from "node-telegram-bot-api";
 import express from "express";
 import fetch from "node-fetch";
-import TelegramBot from "node-telegram-bot-api";
-import dotenv from "dotenv";
 
-dotenv.config();
+const TG_TOKEN = process.env.TG_TOKEN;
+const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
 
-if (!process.env.TG_TOKEN) throw new Error("TG_TOKEN missing");
-if (!process.env.REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN missing");
-
-const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
+const bot = new TelegramBot(TG_TOKEN, { polling: true });
 const app = express();
 
-app.get("/", (req, res) => res.send("Pixlemorphic AI running"));
+let isBusy = false;
+let lastRun = 0;
+
+// Railway keep alive
+app.get("/", (req, res) => res.send("PIXLEMORPHIC AI running"));
 app.listen(process.env.PORT || 3000);
 
-console.log("Pixlemorphic AI ready");
+console.log("PIXLEMORPHIC AI READY");
 
-// Start
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    "👋 Welcome to PIXLEMORPHIC AI\n\nSend any prompt and I will generate a Flux-powered AI image for you."
-  );
-});
-
-// Message
+// Telegram
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const prompt = msg.text;
 
   if (!prompt || prompt.startsWith("/")) return;
 
-  await bot.sendMessage(chatId, "🎨 Generating image...");
+  const now = Date.now();
+  if (isBusy || now - lastRun < 12000) {
+    return bot.sendMessage(chatId, "⏳ Please wait 10 seconds...");
+  }
+
+  isBusy = true;
+  lastRun = now;
 
   try {
-    // 🔥 Create prediction (NEW API)
-    const createRes = await fetch("https://api.replicate.com/v1/predictions", {
+    await bot.sendMessage(chatId, "🎨 Generating image...");
+
+    const res = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
-        Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}`,
-        "Content-Type": "application/json",
+        "Authorization": `Token ${REPLICATE_TOKEN}`,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        version: "db21e45c-7f68-4b28-9f6d-7f6b8bb6b45f", // FLUX Schnell
+        version: "black-forest-labs/flux-1-dev",
         input: {
           prompt: prompt,
+          steps: 30,
+          guidance: 7,
           width: 1024,
-          height: 1024,
-          num_outputs: 1,
-        },
-      }),
+          height: 1024
+        }
+      })
     });
 
-    const prediction = await createRes.json();
+    const prediction = await res.json();
 
-    if (!prediction.id) {
-      console.error(prediction);
-      throw new Error("Prediction not created");
+    if (!prediction.urls?.get) {
+      throw new Error("Prediction failed");
     }
 
-    // 🔁 Poll
-    let status = prediction.status;
-    let result = prediction;
-
-    while (status !== "succeeded" && status !== "failed") {
-      await new Promise((r) => setTimeout(r, 3000));
-      const poll = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-        headers: {
-          Authorization: `Bearer ${process.env.REPLICATE_API_TOKEN}`,
-        },
+    // Poll until done
+    let output = null;
+    while (!output) {
+      await new Promise(r => setTimeout(r, 2500));
+      const check = await fetch(prediction.urls.get, {
+        headers: { "Authorization": `Token ${REPLICATE_TOKEN}` }
       });
-      result = await poll.json();
-      status = result.status;
+      const data = await check.json();
+      if (data.status === "succeeded") output = data.output[0];
+      if (data.status === "failed") throw new Error("Generation failed");
     }
 
-    if (status === "failed") throw new Error("Generation failed");
+    await bot.sendPhoto(chatId, output);
 
-    const imageUrl = result.output[0];
-
-    await bot.sendPhoto(chatId, imageUrl, { caption: "Here is your image ✨" });
-  } catch (err) {
-    console.error(err);
-    await bot.sendMessage(chatId, "❌ Image generation failed. Try again.");
+  } catch (e) {
+    console.log(e);
+    await bot.sendMessage(chatId, "❌ AI busy. Try again in 10 seconds.");
   }
+
+  setTimeout(() => {
+    isBusy = false;
+  }, 12000);
 });
