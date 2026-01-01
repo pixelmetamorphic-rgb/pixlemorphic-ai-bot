@@ -1,84 +1,79 @@
-import TelegramBot from "node-telegram-bot-api";
 import express from "express";
 import fetch from "node-fetch";
+import TelegramBot from "node-telegram-bot-api";
+import dotenv from "dotenv";
 
-const TG_TOKEN = process.env.TG_TOKEN;
-const REPLICATE_TOKEN = process.env.REPLICATE_API_TOKEN;
+dotenv.config();
 
-const bot = new TelegramBot(TG_TOKEN, { polling: true });
+const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
 const app = express();
 
-let isBusy = false;
-let lastRun = 0;
-
-// Railway keep alive
-app.get("/", (req, res) => res.send("PIXLEMORPHIC AI running"));
+app.get("/", (req, res) => res.send("Pixlemorphic AI running"));
 app.listen(process.env.PORT || 3000);
 
-console.log("PIXLEMORPHIC AI READY");
+console.log("Pixlemorphic AI ready");
 
-// Telegram
+bot.onText(/\/start/, (msg) => {
+  bot.sendMessage(msg.chat.id,
+    "👋 Welcome to PIXLEMORPHIC AI\n\nSend any prompt and I will generate an AI image for you."
+  );
+});
+
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const prompt = msg.text;
 
   if (!prompt || prompt.startsWith("/")) return;
 
-  const now = Date.now();
-  if (isBusy || now - lastRun < 12000) {
-    return bot.sendMessage(chatId, "⏳ Please wait 10 seconds...");
-  }
-
-  isBusy = true;
-  lastRun = now;
+  await bot.sendMessage(chatId, "🎨 Generating image...");
 
   try {
-    await bot.sendMessage(chatId, "🎨 Generating image...");
-
-    const res = await fetch("https://api.replicate.com/v1/predictions", {
+    const response = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
-        "Authorization": `Token ${REPLICATE_TOKEN}`,
+        "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        version: "black-forest-labs/flux-1-dev",
+        version: "stability-ai/sdxl",
         input: {
           prompt: prompt,
-          steps: 30,
-          guidance: 7,
           width: 1024,
-          height: 1024
+          height: 1024,
+          num_inference_steps: 25,
+          guidance_scale: 7.5
         }
       })
     });
 
-    const prediction = await res.json();
+    const data = await response.json();
 
-    if (!prediction.urls?.get) {
-      throw new Error("Prediction failed");
+    if (!data.id) {
+      await bot.sendMessage(chatId, "❌ Replicate error. Try again.");
+      return;
     }
 
-    // Poll until done
-    let output = null;
-    while (!output) {
-      await new Promise(r => setTimeout(r, 2500));
-      const check = await fetch(prediction.urls.get, {
-        headers: { "Authorization": `Token ${REPLICATE_TOKEN}` }
+    let result;
+    while (!result || result.status !== "succeeded") {
+      await new Promise(r => setTimeout(r, 3000));
+      const poll = await fetch(`https://api.replicate.com/v1/predictions/${data.id}`, {
+        headers: {
+          "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`
+        }
       });
-      const data = await check.json();
-      if (data.status === "succeeded") output = data.output[0];
-      if (data.status === "failed") throw new Error("Generation failed");
+      result = await poll.json();
+
+      if (result.status === "failed") {
+        await bot.sendMessage(chatId, "❌ Image generation failed.");
+        return;
+      }
     }
 
-    await bot.sendPhoto(chatId, output);
+    const imageUrl = result.output[0];
+    await bot.sendPhoto(chatId, imageUrl);
 
-  } catch (e) {
-    console.log(e);
-    await bot.sendMessage(chatId, "❌ AI busy. Try again in 10 seconds.");
+  } catch (err) {
+    console.error(err);
+    await bot.sendMessage(chatId, "❌ Server error.");
   }
-
-  setTimeout(() => {
-    isBusy = false;
-  }, 12000);
 });
