@@ -1,79 +1,40 @@
-import express from "express";
-import fetch from "node-fetch";
 import TelegramBot from "node-telegram-bot-api";
-import dotenv from "dotenv";
+import fetch from "node-fetch";
 
-dotenv.config();
+const bot = new TelegramBot(process.env.TELEGRAM_TOKEN, { polling: true });
 
-const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
-const app = express();
-
-app.get("/", (req, res) => res.send("Pixlemorphic AI running"));
-app.listen(process.env.PORT || 3000);
-
-console.log("Pixlemorphic AI ready");
-
-bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(msg.chat.id,
-    "👋 Welcome to PIXLEMORPHIC AI\n\nSend any prompt and I will generate an AI image for you."
-  );
-});
+const FAL_KEY = process.env.FAL_KEY;
 
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const prompt = msg.text;
 
-  if (!prompt || prompt.startsWith("/")) return;
+  if (prompt.startsWith("/")) return;
 
   await bot.sendMessage(chatId, "🎨 Generating image...");
 
   try {
-    const response = await fetch("https://api.replicate.com/v1/predictions", {
+    const res = await fetch("https://fal.run/fal-ai/fast-sdxl", {
       method: "POST",
       headers: {
-        "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`,
+        "Authorization": `Key ${FAL_KEY}`,
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        version: "stability-ai/sdxl",
-        input: {
-          prompt: prompt,
-          width: 1024,
-          height: 1024,
-          num_inference_steps: 25,
-          guidance_scale: 7.5
-        }
+        prompt: prompt,
+        image_size: "square"
       })
     });
 
-    const data = await response.json();
+    const data = await res.json();
 
-    if (!data.id) {
-      await bot.sendMessage(chatId, "❌ Replicate error. Try again.");
-      return;
-    }
+    const image = data.images[0].url;
 
-    let result;
-    while (!result || result.status !== "succeeded") {
-      await new Promise(r => setTimeout(r, 3000));
-      const poll = await fetch(`https://api.replicate.com/v1/predictions/${data.id}`, {
-        headers: {
-          "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`
-        }
-      });
-      result = await poll.json();
+    await bot.sendPhoto(chatId, image, { caption: "✨ Powered by PIXLEMORPHIC AI" });
 
-      if (result.status === "failed") {
-        await bot.sendMessage(chatId, "❌ Image generation failed.");
-        return;
-      }
-    }
-
-    const imageUrl = result.output[0];
-    await bot.sendPhoto(chatId, imageUrl);
-
-  } catch (err) {
-    console.error(err);
-    await bot.sendMessage(chatId, "❌ Server error.");
+  } catch (e) {
+    await bot.sendMessage(chatId, "❌ Image failed. Try again.");
   }
 });
+
+console.log("Pixlemorphic AI running on fal.ai");
