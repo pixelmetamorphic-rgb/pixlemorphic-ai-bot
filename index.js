@@ -41,7 +41,7 @@ bot.on("message", async (msg) => {
         "Content-Type": "application/json"
       },
       body: JSON.stringify({
-        model: "stability-ai/sdxl",
+        model:"stability-ai/sdxl:latest",
         input: {
           prompt,
           width: 1024,
