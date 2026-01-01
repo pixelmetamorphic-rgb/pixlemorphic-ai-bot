@@ -5,38 +5,46 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
-if (!process.env.TG_TOKEN) throw new Error("TG_TOKEN missing");
-if (!process.env.REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN missing");
-
-const bot = new TelegramBot(process.env.TG_TOKEN, { polling: true });
 const app = express();
+app.use(express.json());
 
-app.get("/", (req, res) => res.send("PIXLEMORPHIC AI is running"));
-app.listen(3000);
+const bot = new TelegramBot(process.env.TG_TOKEN);
 
-console.log("Pixlemorphic AI ready");
+const WEBHOOK_URL = process.env.WEBHOOK_URL;
 
+// health check
+app.get("/", (req, res) => res.send("PIXLEMORPHIC AI running"));
 
-// ---------------- /start ----------------
+// telegram webhook endpoint
+app.post("/webhook", (req, res) => {
+  bot.processUpdate(req.body);
+  res.sendStatus(200);
+});
+
+// start server
+app.listen(3000, async () => {
+  console.log("Server running");
+
+  await bot.setWebHook(`${WEBHOOK_URL}/webhook`);
+  console.log("Webhook set");
+});
+
+// /start
 bot.onText(/\/start/, (msg) => {
-  bot.sendMessage(
-    msg.chat.id,
-    "👋 Welcome to PIXLEMORPHIC AI\n\nSend any prompt.\nI generate professional AI images for you."
+  bot.sendMessage(msg.chat.id,
+    "👋 Welcome to PIXLEMORPHIC AI\n\nSend any prompt. I generate professional AI images for you."
   );
 });
 
-
-// ---------------- IMAGE GENERATION ----------------
+// message handler
 bot.on("message", async (msg) => {
   const chatId = msg.chat.id;
   const prompt = msg.text;
-
   if (!prompt || prompt.startsWith("/")) return;
 
   try {
     await bot.sendMessage(chatId, "🎨 Generating image…");
 
-    // 1️⃣ Create prediction
     const create = await fetch("https://api.replicate.com/v1/predictions", {
       method: "POST",
       headers: {
@@ -45,48 +53,29 @@ bot.on("message", async (msg) => {
       },
       body: JSON.stringify({
         version: "black-forest-labs/flux-schnell",
-        input: {
-          prompt: prompt,
-          width: 1024,
-          height: 1024,
-          num_outputs: 1
-        }
+        input: { prompt }
       })
     });
 
     const prediction = await create.json();
+    if (!prediction.id) throw new Error("Prediction failed");
 
-    if (!prediction.id) {
-      console.error(prediction);
-      return bot.sendMessage(chatId, "❌ Image generation failed.");
-    }
-
-    // 2️⃣ Poll until ready
     let result;
     while (true) {
       const poll = await fetch(`https://api.replicate.com/v1/predictions/${prediction.id}`, {
-        headers: {
-          "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}`
-        }
+        headers: { "Authorization": `Token ${process.env.REPLICATE_API_TOKEN}` }
       });
 
       result = await poll.json();
-
       if (result.status === "succeeded") break;
-      if (result.status === "failed") {
-        console.error(result);
-        return bot.sendMessage(chatId, "❌ Generation failed.");
-      }
-
-      await new Promise(r => setTimeout(r, 2500));
+      if (result.status === "failed") throw new Error("Generation failed");
+      await new Promise(r => setTimeout(r, 2000));
     }
 
-    // 3️⃣ Send image
-    const imageUrl = result.output[0];
-    await bot.sendPhoto(chatId, imageUrl);
+    await bot.sendPhoto(chatId, result.output[0]);
 
   } catch (err) {
     console.error(err);
-    bot.sendMessage(chatId, "⚠️ Server error. Try again.");
+    bot.sendMessage(chatId, "❌ Image generation failed.");
   }
 });
