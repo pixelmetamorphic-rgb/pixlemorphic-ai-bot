@@ -53,7 +53,7 @@ async function setPlan(id,plan){
 const buildPrompt = (p,m) => `
 Ultra high quality professional image.
 Mode: ${m}.
-Perfect anatomy, correct text, no blur, no distortion.
+Perfect anatomy, no blur, no distortion, correct text.
 Prompt: ${p}
 `;
 
@@ -70,7 +70,7 @@ async function falCall(model,prompt,image=null,size=null){
   if(d.image?.url) return d.image.url;
   if(d.output?.images?.length) return d.output.images[0];
 
-  throw new Error("No image returned");
+  throw new Error("Fal returned no image");
 }
 
 // ---------------- START ----------------
@@ -99,6 +99,7 @@ bot.onText(/\/planvalidity/,async m=>{
 // ---------------- ADMIN ----------------
 bot.onText(/\/setplan (\d+) (\w+)/,async(m,x)=>{
   if(!isAdmin(m.chat.id))return;
+  if(!PLANS[x[2]]) return bot.sendMessage(m.chat.id,"Invalid plan");
   await setPlan(x[1],x[2]);
   bot.sendMessage(m.chat.id,"Plan updated");
 });
@@ -112,7 +113,7 @@ bot.onText(/\/setcredits (\d+) (\d+)/,async(m,x)=>{
 });
 
 // ---------------- GENERATION ----------------
-bot.onText(/\/gen/,m=>{
+bot.onText(/\/gen/, m=>{
   bot.sendMessage(m.chat.id,
 `Choose:
 1 Cinematic 2K
@@ -123,23 +124,25 @@ bot.onText(/\/gen/,m=>{
 6 EDIT
 7 🦈 SHARK`);
   
-  bot.once("message",async c=>{
+  bot.once("message", async c=>{
     const map={1:"cinematic_2k",2:"cinematic_4k",3:"realism_2k",4:"realism_4k",5:"ultra8k",6:"edit",7:"shark_v1"};
     const mode=map[c.text];
-    if(!mode)return;
+    if(!mode) return;
 
     const u=await getUser(c.chat.id);
     const mdel=MODELS[mode];
 
     if(!isAdmin(c.chat.id)){
-      if(u.credits<mdel.credits)return bot.sendMessage(c.chat.id,"❌ Insufficient credits");
+      if(u.credits<mdel.credits) return bot.sendMessage(c.chat.id,"❌ Insufficient credits");
       if((mode==="ultra8k"&&!u.can8k)||(mode==="edit"&&!u.canEdit)||(mode==="shark_v1"&&!u.canShark))
         return bot.sendMessage(c.chat.id,"🔒 Upgrade required");
     }
 
-    bot.sendMessage(c.chat.id,"🦈 Processing... please wait 20–40 sec");
+    bot.sendMessage(c.chat.id,"✍️ Send your prompt");
 
-    bot.once("message",async p=>{
+    bot.once("message", async p=>{
+      await bot.sendMessage(c.chat.id,"🦈 Processing… please wait 20–40 sec");
+
       try{
         if(!isAdmin(c.chat.id)){
           u.credits-=mdel.credits;
