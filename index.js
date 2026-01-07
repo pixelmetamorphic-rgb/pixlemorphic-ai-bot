@@ -2,157 +2,110 @@ import express from "express";
 import fetch from "node-fetch";
 import Redis from "ioredis";
 
-/* ================== CONFIG ================== */
-const TG_TOKEN = process.env.TG_TOKEN;
-const FAL_KEY = process.env.FAL_API_KEY;
-const REDIS_URL = process.env.REDIS_URL;
-const PUBLIC_URL = process.env.PUBLIC_URL;
-const ADMIN_ID = "1078816855";
-
-const TG = `https://api.telegram.org/bot${TG_TOKEN}`;
-const redis = new Redis(REDIS_URL);
-
-/* ================== APP ================== */
 const app = express();
 app.use(express.json());
 
-/* ================== HELPERS ================== */
-async function tg(method, data) {
-  await fetch(`${TG}/${method}`, {
+const TG = process.env.TG_TOKEN;
+const FAL = process.env.FAL_API_KEY;
+const redis = new Redis(process.env.REDIS_URL);
+
+const TG_API = `https://api.telegram.org/bot${TG}`;
+
+// ---------------------------------
+// UTILS
+// ---------------------------------
+async function send(chatId, text) {
+  await fetch(`${TG_API}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data)
+    body: JSON.stringify({ chat_id: chatId, text })
   });
 }
 
-async function getUser(id) {
-  const raw = await redis.get(`user:${id}`);
-  if (!raw) {
-    const user = { credits: 40 }; // trial
-    await redis.set(`user:${id}`, JSON.stringify(user));
-    return user;
+async function getCredits(user) {
+  let c = await redis.get(`credits:${user}`);
+  if (!c) {
+    await redis.set(`credits:${user}`, 40); // trial
+    return 40;
   }
-  return JSON.parse(raw);
+  return parseInt(c);
 }
 
-async function saveUser(id, user) {
-  await redis.set(`user:${id}`, JSON.stringify(user));
-}
+// ---------------------------------
+// WEBHOOK
+// ---------------------------------
+app.post("/", async (req, res) => {
+  res.send("ok"); // ALWAYS ACK TELEGRAM
 
-/* ================== WEBHOOK ================== */
-app.post("/webhook", async (req, res) => {
-  res.sendStatus(200);
+  try {
+    const msg = req.body.message;
+    if (!msg) return;
 
-  const msg = req.body.message;
-  if (!msg || !msg.text) return;
+    const chatId = msg.chat.id;
+    const user = msg.from.id;
+    const text = msg.text || "";
 
-  const chat = msg.chat.id;
-  const text = msg.text.trim();
+    // ---------------- START
+    if (text === "/start") {
+      return send(chatId,
+`Welcome to PIXELMETA AI 🚀
 
-  // /start
-  if (text === "/start") {
-    const user = await getUser(chat);
-    return tg("sendMessage", {
-      chat_id: chat,
-      text: `🎨 PIXELMETA AI\nCredits: ${user.credits}\n\nSend any prompt to generate an image.`
-    });
-  }
+Commands:
+ /gen - generate image
+ /credits - check credits
+ /planvalidity - plan status`);
+    }
 
-  // /credits
-  if (text === "/credits") {
-    const user = await getUser(chat);
-    return tg("sendMessage", {
-      chat_id: chat,
-      text: `💳 Credits: ${user.credits}`
-    });
-  }
+    // ---------------- CREDITS
+    if (text === "/credits") {
+      const c = await getCredits(user);
+      return send(chatId, `💳 You have ${c} credits`);
+    }
 
-  // Admin: /setcredit <id> <amount>
-  if (chat == ADMIN_ID && text.startsWith("/setcredit")) {
-    const [_, uid, amt] = text.split(" ");
-    const u = await getUser(uid);
-    u.credits = parseInt(amt);
-    await saveUser(uid, u);
-    return tg("sendMessage", {
-      chat_id: chat,
-      text: `✅ Credits set for ${uid} → ${amt}`
-    });
-  }
+    // ---------------- PLAN
+    if (text === "/planvalidity") {
+      return send(chatId, "Trial plan active");
+    }
 
-  // Normal prompt
-  const user = await getUser(chat);
-  if (user.credits < 2) {
-    return tg("sendMessage", {
-      chat_id: chat,
-      text: "❌ Not enough credits."
-    });
-  }
+    // ---------------- GENERATE
+    if (text.startsWith("/gen")) {
+      const prompt = text.replace("/gen", "").trim();
+      if (!prompt) return send(chatId, "Send like: /gen a cyberpunk city");
 
-  await tg("sendMessage", {
-    chat_id: chat,
-    text: "⏳ Generating image..."
-  });
+      const credits = await getCredits(user);
+      if (credits < 2) return send(chatId, "❌ Not enough credits");
 
-  // Push job to queue
-  await redis.lpush("queue", JSON.stringify({
-    chat,
-    prompt: text,
-    tries: 0
-  }));
-});
+      await redis.decrby(`credits:${user}`, 2);
+      send(chatId, "🎨 Generating...");
 
-/* ================== WORKER ================== */
-async function worker() {
-  while (true) {
-    const job = await redis.brpop("queue", 0);
-    const data = JSON.parse(job[1]);
-
-    try {
-      const r = await fetch("https://api.fal.ai/generate", {
+      // Fal job
+      const r = await fetch("https://fal.run/fal-ai/fast-sdxl", {
         method: "POST",
         headers: {
-          "Authorization": `Key ${FAL_KEY}`,
+          "Authorization": `Key ${FAL}`,
           "Content-Type": "application/json"
         },
-        body: JSON.stringify({
-          model: "flux-pro",
-          prompt: data.prompt
-        })
+        body: JSON.stringify({ prompt })
       });
 
-      const j = await r.json();
-      const img = j?.images?.[0]?.url;
-      if (!img) throw "no image";
+      const data = await r.json();
 
-      await tg("sendPhoto", {
-        chat_id: data.chat,
-        photo: img
-      });
-
-      const u = await getUser(data.chat);
-      u.credits -= 2;
-      await saveUser(data.chat, u);
-
-    } catch (e) {
-      if (data.tries < 3) {
-        data.tries++;
-        await new Promise(r => setTimeout(r, 3000)); // delay
-        await redis.lpush("queue", JSON.stringify(data));
-      } else {
-        await tg("sendMessage", {
-          chat_id: data.chat,
-          text: "⚠️ Generation failed. Try again later."
-        });
+      if (!data.images || !data.images[0]) {
+        return send(chatId, "❌ Generation failed, credits refunded");
       }
+
+      const img = data.images[0].url;
+
+      await fetch(`${TG_API}/sendPhoto`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, photo: img })
+      });
     }
+
+  } catch (e) {
+    console.error(e);
   }
-}
-worker();
-
-/* ================== SERVER ================== */
-app.get("/", (_, res) => res.send("PIXELMETA PHASE-1 LIVE"));
-
-const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
-  console.log("🚀 PIXELMETA PHASE-1 WEBHOOK LIVE");
 });
+
+app.listen(8080, () => console.log("PIXELMETA WEBHOOK LIVE"));
