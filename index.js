@@ -10,127 +10,122 @@ const REDIS_URL = process.env.REDIS_URL;
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const redis = new Redis(REDIS_URL);
 
-// ------------------- CONFIG --------------------
-const FREE_TRIAL = 100;
-
-const MODELS = {
-  cinematic: { credits: 5, fal: "fal-ai/fast-sdxl" },
-  realism: { credits: 15, fal: "fal-ai/realistic-vision" },
-  ultra8k: { credits: 40, fal: "fal-ai/pro-ultra" }
+// ---------------- PLANS ----------------
+const PLANS = {
+  trial:   { credits: 40,  can8k: false, canEdit: false, canShark: false },
+  promo:   { credits: 100, can8k: true,  canEdit: true,  canShark: true  },
+  pro:     { credits: 1200,can8k: true,  canEdit: true,  canShark: true  },
+  premium: { credits: 2000,can8k: true,  canEdit: true,  canShark: true  }
 };
-// -----------------------------------------------
 
+// ---------------- MODELS ----------------
+const MODELS = {
+  cinematic_2k: { credits: 2,  pipeline: ["fal-ai/flux-pro","fal-ai/sdxl-cinematic"], size: "2048x2048" },
+  cinematic_4k: { credits: 4,  pipeline: ["fal-ai/flux-pro","fal-ai/sdxl-cinematic"], size: "4096x4096" },
 
-// Create user if not exists
-async function getUser(id) {
-  let data = await redis.get(`user:${id}`);
-  if (!data) {
-    const user = { credits: FREE_TRIAL };
-    await redis.set(`user:${id}`, JSON.stringify(user));
+  realism_2k:   { credits: 4,  pipeline: ["fal-ai/realistic-vision","fal-ai/gpt-image-1.5/edit"], size: "2048x2048" },
+  realism_4k:   { credits: 10, pipeline: ["fal-ai/realistic-vision","fal-ai/gpt-image-1.5/edit"], size: "4096x4096" },
+
+  ultra8k:      { credits: 10, pipeline: ["fal-ai/realistic-vision","fal-ai/pro-ultra"], size: "8192x8192" },
+
+  edit:         { credits: 80, pipeline: ["fal-ai/gpt-image-1.5/edit"] },
+
+  shark_v1:     { credits: 140, pipeline: ["fal-ai/gpt-image-1.5/edit","fal-ai/realistic-vision","fal-ai/pro-ultra"] }
+};
+
+// ---------------- USER ----------------
+async function getUser(id){
+  const data = await redis.get(`user:${id}`);
+  if(!data){
+    const expiry = Date.now() + 30*24*60*60*1000;
+    const user = { plan:"trial", credits:40, expiry, ...PLANS.trial };
+    await redis.set(`user:${id}`,JSON.stringify(user));
     return user;
   }
   return JSON.parse(data);
 }
 
-// Update credits
-async function setCredits(id, amount) {
-  const user = await getUser(id);
-  user.credits = amount;
-  await redis.set(`user:${id}`, JSON.stringify(user));
+// ---------------- PROMPT ----------------
+function buildPrompt(prompt, mode){
+  return `
+Ultra high quality professional AI image.
+Mode: ${mode}.
+Correct spelling for any text.
+No blur, no distortion, no extra fingers, no wrong faces.
+Sharp details, realistic textures, cinematic lighting.
+Prompt: ${prompt}
+`;
 }
 
-// ---------------- START -----------------
-bot.onText(/\/start/, async (msg) => {
-  const id = msg.chat.id;
-  const user = await getUser(id);
-
-  bot.sendMessage(id,
-`🎨 *PIXLEMETA AI*
-
-Welcome!  
-You have *${user.credits} credits*.
-
-Choose:
-🖼 Generate Image  
-🎬 Generate Video (Coming Soon)  
-💳 My Credits`,
-{ parse_mode: "Markdown" });
+// ---------------- COMMANDS ----------------
+bot.onText(/\/start/, async msg=>{
+  const u = await getUser(msg.chat.id);
+  bot.sendMessage(msg.chat.id,
+`🦈 PIXELMETA AI
+Plan: ${u.plan.toUpperCase()}
+Credits: ${u.credits}
+/gen - Generate
+/credits
+/planvalidity`);
 });
 
-// ---------------- CREDITS ----------------
-bot.onText(/\/credits/, async (msg) => {
-  const user = await getUser(msg.chat.id);
-  bot.sendMessage(msg.chat.id, `💳 Your Credits: ${user.credits}`);
+bot.onText(/\/credits/, async msg=>{
+  const u = await getUser(msg.chat.id);
+  bot.sendMessage(msg.chat.id,`Credits: ${u.credits}`);
 });
 
-// ---------------- VIDEO -----------------
-bot.onText(/\/video/, (msg) => {
-  bot.sendMessage(msg.chat.id, "🎬 Video generation is coming soon 🚀");
+bot.onText(/\/planvalidity/, async msg=>{
+  const u = await getUser(msg.chat.id);
+  const d = new Date(u.expiry).toLocaleDateString();
+  bot.sendMessage(msg.chat.id,`Plan: ${u.plan}\nCredits: ${u.credits}\nValid till: ${d}`);
 });
 
-// ---------------- IMAGE -----------------
-bot.on("message", async (msg) => {
-  const chatId = msg.chat.id;
-  const prompt = msg.text;
-
-  if (!prompt || prompt.startsWith("/")) return;
-
-  await bot.sendMessage(chatId,
-`Choose Image Mode:
-1️⃣ Cinematic (5 credits)  
-2️⃣ Realism (15 credits)  
-3️⃣ Ultra 8K (40 credits)
-
-Reply with: 1, 2 or 3`);
+// ---------------- GENERATION ----------------
+bot.onText(/\/gen/, async msg=>{
+  bot.sendMessage(msg.chat.id,
+`Choose:
+1 Cinematic 2K
+2 Cinematic 4K
+3 Realism 2K
+4 Realism 4K
+5 Ultra 8K
+6 EDIT
+7 🦈 SHARK`);
   
-  bot.once("message", async (modeMsg) => {
-    const choice = modeMsg.text;
-    let mode;
+  bot.once("message", async m=>{
+    const map = {1:"cinematic_2k",2:"cinematic_4k",3:"realism_2k",4:"realism_4k",5:"ultra8k",6:"edit",7:"shark_v1"};
+    const mode = map[m.text];
+    if(!mode) return;
 
-    if (choice === "1") mode = "cinematic";
-    else if (choice === "2") mode = "realism";
-    else if (choice === "3") mode = "ultra8k";
-    else {
-      bot.sendMessage(chatId, "❌ Invalid choice");
-      return;
-    }
+    const user = await getUser(m.chat.id);
+    const model = MODELS[mode];
 
-    const user = await getUser(chatId);
+    if(user.credits < model.credits)
+      return bot.sendMessage(m.chat.id,"❌ Insufficient credits");
 
-    if (user.credits < MODELS[mode].credits) {
-      bot.sendMessage(chatId, "❌ Not enough credits");
-      return;
-    }
+    if((mode==="ultra8k"&&!user.can8k)||(mode==="edit"&&!user.canEdit)||(mode==="shark_v1"&&!user.canShark))
+      return bot.sendMessage(m.chat.id,"🔒 Upgrade required");
 
-    await bot.sendMessage(chatId, "🎨 Generating image...");
+    bot.sendMessage(m.chat.id,"Send your prompt:");
+    
+    bot.once("message", async p=>{
+      user.credits -= model.credits;
+      await redis.set(`user:${m.chat.id}`,JSON.stringify(user));
 
-    try {
-      const response = await fetch(`https://fal.run/${MODELS[mode].fal}`, {
-        method: "POST",
-        headers: {
-          "Authorization": `Key ${FAL_KEY}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({
-          prompt: prompt,
-          image_size: "square"
-        })
-      });
+      let img=null;
+      for(const fal of model.pipeline){
+        const r = await fetch(`https://fal.run/${fal}`,{
+          method:"POST",
+          headers:{Authorization:`Key ${FAL_KEY}`,"Content-Type":"application/json"},
+          body:JSON.stringify({prompt:buildPrompt(p.text,mode),image:img,image_size:model.size})
+        });
+        const d = await r.json();
+        img = d.images[0].url;
+      }
 
-      const data = await response.json();
-      const image = data.images[0].url;
-
-      await setCredits(chatId, user.credits - MODELS[mode].credits);
-
-      await bot.sendPhoto(chatId, image, {
-        caption: `✨ Pixlemeta ${mode.toUpperCase()}`
-      });
-
-    } catch (e) {
-      console.log(e);
-      bot.sendMessage(chatId, "❌ Image generation failed");
-    }
+      bot.sendPhoto(m.chat.id,img,{caption:`PIXELMETA ${mode.toUpperCase()}`});
+    });
   });
 });
 
-console.log("PIXLEMETA AI READY 🚀");
+console.log("🦈 PIXELMETA LIVE");
