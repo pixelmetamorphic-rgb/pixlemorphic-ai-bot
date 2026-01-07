@@ -1,108 +1,102 @@
+// PIXELMETA AI — FAL SAFE ENGINE
+
 import express from "express";
 import fetch from "node-fetch";
-import TelegramBot from "node-telegram-bot-api";
 import Redis from "ioredis";
-
-const TOKEN = process.env.TG_TOKEN;
-const PORT = process.env.PORT || 3000;
-const FAL_KEY = process.env.FAL_API_KEY;
-const REDIS_URL = process.env.REDIS_URL;
-
-const redis = new Redis(REDIS_URL);
 
 const app = express();
 app.use(express.json());
 
-const bot = new TelegramBot(TOKEN);
-bot.setWebHook(`${process.env.RAILWAY_PUBLIC_URL}/webhook`);
+const TG = process.env.TG_TOKEN;
+const FAL = process.env.FAL_API_KEY;
+const REDIS = new Redis(process.env.REDIS_URL);
+const PUBLIC_URL = process.env.PUBLIC_URL;
 
-console.log("🚀 PIXELMETA WEBHOOK LIVE");
+const FAL_MODELS = {
+  cinematic2k: "fal-ai/flux-cinematic",
+  cinematic4k: "fal-ai/flux-cinematic-hq",
+  realism2k: "fal-ai/flux-realism",
+  realism4k: "fal-ai/flux-realism-hq",
+  ultra8k: "fal-ai/flux-ultra",
+  edit: "fal-ai/gpt-image-1.5-edit",
+  shark: "fal-ai/flux-ultra"
+};
 
-// ---- CREDIT HELPERS ----
-async function getCredits(id) {
-  return parseInt((await redis.get(`credit:${id}`)) || "0");
+async function tg(chat, text) {
+  await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chat, text })
+  });
 }
 
-async function setCredits(id, value) {
-  await redis.set(`credit:${id}`, value);
+async function tgImage(chat, url) {
+  await fetch(`https://api.telegram.org/bot${TG}/sendPhoto`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chat, photo: url })
+  });
 }
 
-// ---- ADMIN ----
-const ADMIN_ID = "1078816855"; // YOU
+app.post("/", async (req, res) => {
+  res.send("OK");
 
-// ---- WEBHOOK HANDLER ----
-app.post("/webhook", async (req, res) => {
-  try {
-    const update = req.body;
+  const msg = req.body.message;
+  if (!msg || !msg.text) return;
 
-    if (update.message) {
-      const msg = update.message;
-      const chatId = msg.chat.id;
-      const text = msg.text || "";
+  const chat = msg.chat.id;
+  const text = msg.text;
 
-      if (text === "/start") {
-        let c = await getCredits(chatId);
-        if (!c) {
-          c = 40;
-          await setCredits(chatId, 40);
-        }
-        await bot.sendMessage(chatId, `👋 Welcome to PIXELMETA AI\nCredits: ${c}\nSend any prompt to generate an image.`);
-      }
+  if (text === "/start") {
+    return tg(chat, "PIXELMETA AI Ready\nSend prompt to generate image.");
+  }
 
-      // ADMIN COMMAND
-      if (text.startsWith("/setcredit") && chatId == ADMIN_ID) {
-        const [_, uid, amt] = text.split(" ");
-        await setCredits(uid, amt);
-        return bot.sendMessage(chatId, `✅ Credits set for ${uid} → ${amt}`);
-      }
+  // push job
+  await REDIS.lpush("queue", JSON.stringify({
+    chat,
+    prompt: text,
+    mode: "shark",
+    tries: 0
+  }));
 
-      if (!text.startsWith("/")) {
-        const credits = await getCredits(chatId);
-        if (credits < 2) {
-          return bot.sendMessage(chatId, "❌ Insufficient credits. Recharge needed.");
-        }
+  tg(chat, "🦈 Processing in queue...");
+});
 
-        await bot.sendMessage(chatId, "⏳ Generating image...");
+async function worker() {
+  while (true) {
+    const job = await REDIS.brpop("queue", 0);
+    const data = JSON.parse(job[1]);
 
-        const img = await generateImage(text);
+    try {
+      const model = FAL_MODELS[data.mode];
+      const r = await fetch(`https://api.fal.ai/generate`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Key ${FAL}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          model,
+          prompt: data.prompt,
+          image_size: "square_8k"
+        })
+      });
 
-        if (img) {
-          await bot.sendPhoto(chatId, img);
-          await setCredits(chatId, credits - 2);
-        } else {
-          await bot.sendMessage(chatId, "⚠️ Server busy, please try again.");
-        }
+      const j = await r.json();
+      if (!j.images) throw "fail";
+
+      await tgImage(data.chat, j.images[0].url);
+    } catch (e) {
+      if (data.tries < 5) {
+        data.tries++;
+        await REDIS.lpush("queue", JSON.stringify(data));
+      } else {
+        await tg(data.chat, "❌ Engine busy. Try again.");
       }
     }
-
-    res.sendStatus(200);
-  } catch (err) {
-    console.error(err);
-    res.sendStatus(500);
-  }
-});
-
-// ---- FAL + FALLBACK ----
-async function generateImage(prompt) {
-  try {
-    const r = await fetch("https://fal.run/fal-ai/flux-pro", {
-      method: "POST",
-      headers: {
-        "Authorization": `Key ${FAL_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify({ prompt })
-    });
-
-    const data = await r.json();
-    return data.images[0].url;
-  } catch (e) {
-    console.log("FAL FAILED → fallback");
-    return null;
   }
 }
 
-// ---- START SERVER ----
-app.listen(PORT, () => {
-  console.log("Server running on", PORT);
-});
+worker();
+app.listen(8080);
+console.log("🚀 PIXELMETA WEBHOOK LIVE");
