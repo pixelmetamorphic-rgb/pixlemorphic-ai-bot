@@ -5,8 +5,7 @@ import Redis from "ioredis";
 const BOT_TOKEN = process.env.TG_TOKEN;
 const FAL_KEY = process.env.FAL_KEY;
 const REDIS_URL = process.env.REDIS_URL;
-
-const ADMIN_ID = 1078816855; // HARSH
+const ADMIN_ID = 1078816855;
 
 const bot = new TelegramBot(BOT_TOKEN, { polling: true });
 const redis = new Redis(REDIS_URL);
@@ -31,84 +30,90 @@ const MODELS = {
 };
 
 // ---------------- HELPERS ----------------
-function isAdmin(id) {
-  return id === ADMIN_ID;
-}
+const isAdmin = id => id === ADMIN_ID;
 
-async function getUser(id) {
-  const data = await redis.get(`user:${id}`);
-  if (!data) {
-    const expiry = Date.now() + 30*24*60*60*1000;
-    const user = { plan: "trial", credits: 40, expiry, ...PLANS.trial };
-    await redis.set(`user:${id}`, JSON.stringify(user));
-    return user;
+async function getUser(id){
+  const d = await redis.get(`user:${id}`);
+  if(!d){
+    const exp = Date.now() + 30*24*60*60*1000;
+    const u = { plan:"trial", credits:40, expiry:exp, ...PLANS.trial };
+    await redis.set(`user:${id}`,JSON.stringify(u));
+    return u;
   }
-  return JSON.parse(data);
+  return JSON.parse(d);
 }
 
-async function setPlan(id, plan) {
-  const expiry = Date.now() + 30*24*60*60*1000;
-  const user = { plan, expiry, ...PLANS[plan] };
-  await redis.set(`user:${id}`, JSON.stringify(user));
+async function setPlan(id,plan){
+  const exp = Date.now() + 30*24*60*60*1000;
+  const u = { plan, expiry:exp, ...PLANS[plan] };
+  await redis.set(`user:${id}`,JSON.stringify(u));
 }
 
 // ---------------- PROMPT ENGINE ----------------
-function buildPrompt(prompt, mode) {
-  return `
+const buildPrompt = (p,m) => `
 Ultra high quality professional image.
-Mode: ${mode}.
-No blur, no artifacts, no extra fingers.
-Text must be spelled correctly if present.
-Realistic lighting, sharp textures, perfect anatomy.
-Prompt: ${prompt}
+Mode: ${m}.
+Perfect anatomy, correct text, no blur, no distortion.
+Prompt: ${p}
 `;
+
+// ---------------- SAFE FAL ----------------
+async function falCall(model,prompt,image=null,size=null){
+  const r = await fetch(`https://fal.run/${model}`,{
+    method:"POST",
+    headers:{Authorization:`Key ${FAL_KEY}`,"Content-Type":"application/json"},
+    body:JSON.stringify({prompt,image,image_size:size})
+  });
+  const d = await r.json();
+
+  if(d.images?.length) return d.images[0].url;
+  if(d.image?.url) return d.image.url;
+  if(d.output?.images?.length) return d.output.images[0];
+
+  throw new Error("No image returned");
 }
 
 // ---------------- START ----------------
-bot.onText(/\/start/, async msg => {
-  const u = await getUser(msg.chat.id);
-  bot.sendMessage(msg.chat.id,
+bot.onText(/\/start/, async m=>{
+  const u=await getUser(m.chat.id);
+  bot.sendMessage(m.chat.id,
 `🦈 PIXELMETA AI
 Plan: ${u.plan.toUpperCase()}
 Credits: ${u.credits}
 
-/gen – Generate
-/credits – Balance
-/planvalidity – Expiry`);
+/gen
+/credits
+/planvalidity`);
 });
 
-bot.onText(/\/credits/, async msg => {
-  const u = await getUser(msg.chat.id);
-  bot.sendMessage(msg.chat.id, `Credits: ${u.credits}`);
+bot.onText(/\/credits/,async m=>{
+  const u=await getUser(m.chat.id);
+  bot.sendMessage(m.chat.id,`Credits: ${u.credits}`);
 });
 
-bot.onText(/\/planvalidity/, async msg => {
-  const u = await getUser(msg.chat.id);
-  const d = new Date(u.expiry).toLocaleDateString();
-  bot.sendMessage(msg.chat.id, `Plan: ${u.plan}\nCredits: ${u.credits}\nValid till: ${d}`);
+bot.onText(/\/planvalidity/,async m=>{
+  const u=await getUser(m.chat.id);
+  bot.sendMessage(m.chat.id,`Valid till: ${new Date(u.expiry).toLocaleDateString()}`);
 });
 
 // ---------------- ADMIN ----------------
-bot.onText(/\/setplan (\d+) (\w+)/, async (msg, m) => {
-  if (!isAdmin(msg.chat.id)) return;
-  const id = m[1];
-  const plan = m[2];
-  if (!PLANS[plan]) return bot.sendMessage(msg.chat.id,"Invalid plan");
-  await setPlan(id, plan);
-  bot.sendMessage(msg.chat.id, `User ${id} set to ${plan}`);
+bot.onText(/\/setplan (\d+) (\w+)/,async(m,x)=>{
+  if(!isAdmin(m.chat.id))return;
+  await setPlan(x[1],x[2]);
+  bot.sendMessage(m.chat.id,"Plan updated");
 });
 
-bot.onText(/\/setcredits (\d+) (\d+)/, async (msg, m) => {
-  if (!isAdmin(msg.chat.id)) return;
-  const u = await getUser(m[1]);
-  u.credits = parseInt(m[2]);
-  await redis.set(`user:${m[1]}`, JSON.stringify(u));
-  bot.sendMessage(msg.chat.id, "Credits updated");
+bot.onText(/\/setcredits (\d+) (\d+)/,async(m,x)=>{
+  if(!isAdmin(m.chat.id))return;
+  const u=await getUser(x[1]);
+  u.credits=parseInt(x[2]);
+  await redis.set(`user:${x[1]}`,JSON.stringify(u));
+  bot.sendMessage(m.chat.id,"Credits updated");
 });
 
 // ---------------- GENERATION ----------------
-bot.onText(/\/gen/, async msg => {
-  bot.sendMessage(msg.chat.id,
+bot.onText(/\/gen/,m=>{
+  bot.sendMessage(m.chat.id,
 `Choose:
 1 Cinematic 2K
 2 Cinematic 4K
@@ -118,38 +123,39 @@ bot.onText(/\/gen/, async msg => {
 6 EDIT
 7 🦈 SHARK`);
   
-  bot.once("message", async m => {
-    const map = {1:"cinematic_2k",2:"cinematic_4k",3:"realism_2k",4:"realism_4k",5:"ultra8k",6:"edit",7:"shark_v1"};
-    const mode = map[m.text];
-    if (!mode) return;
+  bot.once("message",async c=>{
+    const map={1:"cinematic_2k",2:"cinematic_4k",3:"realism_2k",4:"realism_4k",5:"ultra8k",6:"edit",7:"shark_v1"};
+    const mode=map[c.text];
+    if(!mode)return;
 
-    const user = await getUser(m.chat.id);
-    const model = MODELS[mode];
+    const u=await getUser(c.chat.id);
+    const mdel=MODELS[mode];
 
-    if (!isAdmin(m.chat.id)) {
-      if (user.credits < model.credits) return bot.sendMessage(m.chat.id,"❌ Insufficient credits");
-      if ((mode==="ultra8k"&&!user.can8k)||(mode==="edit"&&!user.canEdit)||(mode==="shark_v1"&&!user.canShark))
-        return bot.sendMessage(m.chat.id,"🔒 Upgrade required");
+    if(!isAdmin(c.chat.id)){
+      if(u.credits<mdel.credits)return bot.sendMessage(c.chat.id,"❌ Insufficient credits");
+      if((mode==="ultra8k"&&!u.can8k)||(mode==="edit"&&!u.canEdit)||(mode==="shark_v1"&&!u.canShark))
+        return bot.sendMessage(c.chat.id,"🔒 Upgrade required");
     }
 
-    bot.sendMessage(m.chat.id,"Send prompt:");
-    bot.once("message", async p => {
-      if (!isAdmin(m.chat.id)) {
-        user.credits -= model.credits;
-        await redis.set(`user:${m.chat.id}`, JSON.stringify(user));
-      }
+    bot.sendMessage(c.chat.id,"🦈 Processing... please wait 20–40 sec");
 
-      let img=null;
-      for(const fal of model.pipeline){
-        const r = await fetch(`https://fal.run/${fal}`,{
-          method:"POST",
-          headers:{Authorization:`Key ${FAL_KEY}`,"Content-Type":"application/json"},
-          body:JSON.stringify({prompt:buildPrompt(p.text,mode),image:img,image_size:model.size})
-        });
-        const d = await r.json();
-        img = d.images[0].url;
+    bot.once("message",async p=>{
+      try{
+        if(!isAdmin(c.chat.id)){
+          u.credits-=mdel.credits;
+          await redis.set(`user:${c.chat.id}`,JSON.stringify(u));
+        }
+
+        let img=null;
+        for(const f of mdel.pipeline){
+          img = await falCall(f,buildPrompt(p.text,mode),img,mdel.size);
+        }
+
+        bot.sendPhoto(c.chat.id,img,{caption:`PIXELMETA ${mode.toUpperCase()}`});
+      }catch(e){
+        console.log(e);
+        bot.sendMessage(c.chat.id,"❌ Generation failed. Please try again.");
       }
-      bot.sendPhoto(m.chat.id,img,{caption:`PIXELMETA ${mode.toUpperCase()}`});
     });
   });
 });
