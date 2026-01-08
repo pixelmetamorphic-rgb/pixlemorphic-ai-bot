@@ -1,4 +1,5 @@
 import express from "express";
+import fetch from "node-fetch";
 import Redis from "ioredis";
 
 const app = express();
@@ -56,7 +57,7 @@ async function useCredits(id, n) {
 
 // ===== WEBHOOK =====
 app.post("/", async (req, res) => {
-  res.sendStatus(200); // VERY IMPORTANT
+  res.sendStatus(200); // 🔥 THIS fixes Telegram 502
 
   const msg = req.body.message;
   if (!msg) return;
@@ -95,8 +96,8 @@ app.post("/", async (req, res) => {
   }
 });
 
-// ===== PORT =====
-const PORT = process.env.PORT || 3000;
+// ===== RAILWAY PORT =====
+const PORT = 3000;   // 🔥 MUST be 3000 for Railway public URL
 app.listen(PORT, () => {
-  console.log("PIXELMETA WEBHOOK LIVE on", PORT);
+  console.log("🚀 PIXELMETA WEBHOOK LIVE on", PORT);
 });
