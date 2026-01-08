@@ -5,6 +5,7 @@ const Redis = require("ioredis");
 const app = express();
 app.use(express.json());
 
+// ===== ENV =====
 const TG = process.env.TG_TOKEN;
 const FAL = process.env.FAL_API_KEY;
 const REDIS = process.env.REDIS_URL;
@@ -21,8 +22,8 @@ async function send(chat, text) {
   });
 }
 
-// ===== FAL IMAGE =====
-async function generate(prompt) {
+// ===== CREATE FAL JOB =====
+async function createJob(prompt) {
   const r = await fetch("https://fal.run/fal-ai/flux/dev", {
     method: "POST",
     headers: {
@@ -36,14 +37,39 @@ async function generate(prompt) {
   });
 
   const j = await r.json();
-  return j.images[0].url;
+  return j.request_id;
+}
+
+// ===== CHECK FAL JOB =====
+async function getJob(id) {
+  const r = await fetch(`https://fal.run/fal-ai/flux/dev/requests/${id}`, {
+    headers: { Authorization: `Key ${FAL}` }
+  });
+  return await r.json();
+}
+
+// ===== WAIT FOR IMAGE =====
+async function waitForImage(jobId) {
+  for (let i = 0; i < 20; i++) {
+    const res = await getJob(jobId);
+
+    if (res.status === "COMPLETED") {
+      return res.images[0].url;
+    }
+
+    if (res.status === "FAILED") {
+      throw "Flux failed";
+    }
+
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  throw "Timeout";
 }
 
 // ===== CREDITS =====
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
-  const c = await redis.get(`credits:${id}`);
-  return parseInt(c || 0);
+  return parseInt(await redis.get(`credits:${id}`) || 0);
 }
 
 async function useCredits(id, n) {
@@ -54,9 +80,9 @@ async function useCredits(id, n) {
   return true;
 }
 
-// ===== WEBHOOK =====
+// ===== TELEGRAM WEBHOOK =====
 app.post("/", async (req, res) => {
-  res.sendStatus(200);
+  res.sendStatus(200); // VERY IMPORTANT
 
   const msg = req.body.message;
   if (!msg) return;
@@ -85,18 +111,20 @@ app.post("/", async (req, res) => {
       return;
     }
 
-    await send(chat, "⏳ Generating...");
+    await send(chat, "🧠 Flux is rendering your image...");
+
     try {
-      const img = await generate(prompt);
+      const job = await createJob(prompt);
+      const img = await waitForImage(job);
       await send(chat, img);
     } catch {
-      await send(chat, "⚠️ Server busy");
+      await send(chat, "⚠️ Flux servers busy. Try again in 30 sec.");
     }
   }
 });
 
 // ===== RAILWAY PORT =====
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 PIXELMETA WEBHOOK LIVE on", PORT);
+  console.log("🚀 PIXELMETA FLUX QUEUE LIVE on", PORT);
 });
