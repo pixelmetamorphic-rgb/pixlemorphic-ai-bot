@@ -9,7 +9,7 @@ app.use(express.json());
 const TG = process.env.TG_TOKEN;
 const FAL = process.env.FAL_API_KEY;
 const REDIS = process.env.REDIS_URL;
-const ADMIN = "1078816855"; // YOUR TELEGRAM ID
+const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
@@ -22,7 +22,7 @@ async function send(chat, text) {
   });
 }
 
-// ===== IMAGE GENERATOR (FAL) =====
+// ===== IMAGE (FAL) =====
 async function generate(prompt) {
   const r = await fetch("https://fal.run/fal-ai/flux/dev", {
     method: "POST",
@@ -39,7 +39,7 @@ async function generate(prompt) {
   return j.images[0].url;
 }
 
-// ===== CREDIT =====
+// ===== CREDITS =====
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
   const c = await redis.get(`credits:${id}`);
@@ -58,55 +58,59 @@ async function useCredits(id, n) {
 app.post("/", async (req, res) => {
   res.sendStatus(200);
 
-  const msg = req.body.message;
-  if (!msg) return;
+  const update = req.body;
+  const msg = update.message || update.edited_message;
+  if (!msg || !msg.text) return;
 
   const chat = msg.chat.id.toString();
-  const text = msg.text || "";
+  const text = msg.text.trim();
+
+  console.log("TG:", chat, text);
 
   // /start
   if (text === "/start") {
     if (!(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
       await redis.set(`credits:${chat}`, 40);
     }
-    await send(chat, "Welcome to PIXELMETA AI\nUse /gen <prompt> to create images.");
+    await send(chat, "🚀 Welcome to PIXELMETA AI\n\nUse:\n/gen <prompt>\n/credits");
     return;
   }
 
   // /credits
   if (text === "/credits") {
     const c = await getCredits(chat);
-    await send(chat, `Credits: ${c}`);
+    await send(chat, `💳 Credits: ${c}`);
     return;
   }
 
   // /planvalidity
   if (text === "/planvalidity") {
-    await send(chat, "Trial & paid plans: 30 days from activation");
+    await send(chat, "⏳ Validity: 30 days from activation");
     return;
   }
 
   // /gen
   if (text.startsWith("/gen ")) {
-    const prompt = text.replace("/gen ", "");
+    const prompt = text.replace("/gen ", "").trim();
 
     if (!(await useCredits(chat, 2))) {
-      await send(chat, "❌ Insufficient credits");
+      await send(chat, "❌ Not enough credits");
       return;
     }
 
-    await send(chat, "⏳ Generating...");
+    await send(chat, "⏳ Generating image...");
     try {
       const img = await generate(prompt);
       await send(chat, img);
-    } catch {
-      await send(chat, "⚠️ Server busy, try again");
+    } catch (e) {
+      console.error(e);
+      await send(chat, "⚠️ FAL error, try again");
     }
   }
 });
 
-// ===== RAILWAY PORT FIX =====
+// ===== RAILWAY =====
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("PIXELMETA WEBHOOK LIVE on", PORT);
+  console.log("🚀 PIXELMETA WEBHOOK LIVE on", PORT);
 });
