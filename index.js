@@ -5,107 +5,108 @@ import Redis from "ioredis";
 const app = express();
 app.use(express.json());
 
+// ===== ENV =====
 const TG = process.env.TG_TOKEN;
 const FAL = process.env.FAL_API_KEY;
-const redis = new Redis(process.env.REDIS_URL);
+const REDIS = process.env.REDIS_URL;
+const ADMIN = "1078816855"; // YOUR TELEGRAM ID
 
-const TG_API = `https://api.telegram.org/bot${TG}`;
+const redis = new Redis(REDIS);
 
-// ---------------------------------
-// UTILS
-// ---------------------------------
-async function send(chatId, text) {
-  await fetch(`${TG_API}/sendMessage`, {
+// ===== TELEGRAM SEND =====
+async function send(chat, text) {
+  await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chatId, text })
+    body: JSON.stringify({ chat_id: chat, text })
   });
 }
 
-async function getCredits(user) {
-  let c = await redis.get(`credits:${user}`);
-  if (!c) {
-    await redis.set(`credits:${user}`, 40); // trial
-    return 40;
-  }
-  return parseInt(c);
+// ===== IMAGE GENERATOR (FAL) =====
+async function generate(prompt) {
+  const r = await fetch("https://fal.run/fal-ai/flux/dev", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${FAL}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      prompt,
+      image_size: "1024x1024"
+    })
+  });
+  const j = await r.json();
+  return j.images[0].url;
 }
 
-// ---------------------------------
-// WEBHOOK
-// ---------------------------------
+// ===== CREDIT =====
+async function getCredits(id) {
+  if (id === ADMIN) return 999999;
+  const c = await redis.get(`credits:${id}`);
+  return parseInt(c || 0);
+}
+
+async function useCredits(id, n) {
+  if (id === ADMIN) return true;
+  const c = await getCredits(id);
+  if (c < n) return false;
+  await redis.decrby(`credits:${id}`, n);
+  return true;
+}
+
+// ===== WEBHOOK =====
 app.post("/", async (req, res) => {
-  res.send("ok"); // ALWAYS ACK TELEGRAM
+  res.sendStatus(200);
 
-  try {
-    const msg = req.body.message;
-    if (!msg) return;
+  const msg = req.body.message;
+  if (!msg) return;
 
-    const chatId = msg.chat.id;
-    const user = msg.from.id;
-    const text = msg.text || "";
+  const chat = msg.chat.id.toString();
+  const text = msg.text || "";
 
-    // ---------------- START
-    if (text === "/start") {
-      return send(chatId,
-`Welcome to PIXELMETA AI 🚀
+  // /start
+  if (text === "/start") {
+    if (!(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
+      await redis.set(`credits:${chat}`, 40);
+    }
+    await send(chat, "Welcome to PIXELMETA AI\nUse /gen <prompt> to create images.");
+    return;
+  }
 
-Commands:
- /gen - generate image
- /credits - check credits
- /planvalidity - plan status`);
+  // /credits
+  if (text === "/credits") {
+    const c = await getCredits(chat);
+    await send(chat, `Credits: ${c}`);
+    return;
+  }
+
+  // /planvalidity
+  if (text === "/planvalidity") {
+    await send(chat, "Trial & paid plans: 30 days from activation");
+    return;
+  }
+
+  // /gen
+  if (text.startsWith("/gen ")) {
+    const prompt = text.replace("/gen ", "");
+
+    if (!(await useCredits(chat, 2))) {
+      await send(chat, "❌ Insufficient credits");
+      return;
     }
 
-    // ---------------- CREDITS
-    if (text === "/credits") {
-      const c = await getCredits(user);
-      return send(chatId, `💳 You have ${c} credits`);
+    await send(chat, "⏳ Generating...");
+    try {
+      const img = await generate(prompt);
+      await send(chat, img);
+    } catch {
+      await send(chat, "⚠️ Server busy, try again");
     }
-
-    // ---------------- PLAN
-    if (text === "/planvalidity") {
-      return send(chatId, "Trial plan active");
-    }
-
-    // ---------------- GENERATE
-    if (text.startsWith("/gen")) {
-      const prompt = text.replace("/gen", "").trim();
-      if (!prompt) return send(chatId, "Send like: /gen a cyberpunk city");
-
-      const credits = await getCredits(user);
-      if (credits < 2) return send(chatId, "❌ Not enough credits");
-
-      await redis.decrby(`credits:${user}`, 2);
-      send(chatId, "🎨 Generating...");
-
-      // Fal job
-      const r = await fetch("https://fal.run/fal-ai/fast-sdxl", {
-        method: "POST",
-        headers: {
-          "Authorization": `Key ${FAL}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ prompt })
-      });
-
-      const data = await r.json();
-
-      if (!data.images || !data.images[0]) {
-        return send(chatId, "❌ Generation failed, credits refunded");
-      }
-
-      const img = data.images[0].url;
-
-      await fetch(`${TG_API}/sendPhoto`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ chat_id: chatId, photo: img })
-      });
-    }
-
-  } catch (e) {
-    console.error(e);
   }
 });
 
-app.listen(8080, () => console.log("PIXELMETA WEBHOOK LIVE"));
+// ===== RAILWAY PORT FIX =====
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log("PIXELMETA WEBHOOK LIVE on", PORT);
+});
