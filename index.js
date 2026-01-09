@@ -13,7 +13,7 @@ const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
-// ===== HEALTH CHECK (Railway keep-alive) =====
+// ===== KEEP RAILWAY ALIVE =====
 app.get("/", (req, res) => {
   res.send("PIXELMETA AI is running 🚀");
 });
@@ -27,9 +27,9 @@ async function send(chat, text) {
   });
 }
 
-// ===== CREATE FAL JOB =====
+// ===== FAL QUEUE: CREATE JOB =====
 async function createJob(prompt) {
-  const r = await fetch("https://fal.run/fal-ai/flux/dev", {
+  const r = await fetch("https://fal.run/fal-ai/flux/dev/queue", {
     method: "POST",
     headers: {
       Authorization: `Key ${FAL}`,
@@ -42,10 +42,11 @@ async function createJob(prompt) {
   });
 
   const j = await r.json();
+  if (!j.request_id) throw new Error("No job id");
   return j.request_id;
 }
 
-// ===== CHECK FAL JOB =====
+// ===== FAL QUEUE: CHECK JOB =====
 async function getJob(id) {
   const r = await fetch(`https://fal.run/fal-ai/flux/dev/requests/${id}`, {
     headers: { Authorization: `Key ${FAL}` }
@@ -55,10 +56,10 @@ async function getJob(id) {
 
 // ===== WAIT FOR IMAGE =====
 async function waitForImage(jobId) {
-  for (let i = 0; i < 30; i++) {
+  for (let i = 0; i < 40; i++) {
     const res = await getJob(jobId);
 
-    if (res.status === "COMPLETED") {
+    if (res.status === "COMPLETED" && res.images?.length) {
       return res.images[0].url;
     }
 
@@ -69,7 +70,7 @@ async function waitForImage(jobId) {
     await new Promise(r => setTimeout(r, 3000));
   }
 
-  throw new Error("Timeout");
+  throw new Error("Flux timeout");
 }
 
 // ===== CREDITS =====
@@ -88,13 +89,13 @@ async function useCredits(id, n) {
 
 // ===== TELEGRAM WEBHOOK =====
 app.post("/", async (req, res) => {
-  res.sendStatus(200); // Railway + Telegram safety
+  res.sendStatus(200);
 
   const msg = req.body.message;
-  if (!msg) return;
+  if (!msg || !msg.text) return;
 
   const chat = msg.chat.id.toString();
-  const text = msg.text || "";
+  const text = msg.text.trim();
 
   if (text === "/start") {
     if (!(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
@@ -110,7 +111,8 @@ app.post("/", async (req, res) => {
   }
 
   if (text.startsWith("/gen ")) {
-    const prompt = text.replace("/gen ", "").trim();
+    const prompt = text.slice(5).trim();
+    if (!prompt) return;
 
     if (!(await useCredits(chat, 2))) {
       await send(chat, "❌ Not enough credits");
@@ -123,14 +125,14 @@ app.post("/", async (req, res) => {
       const job = await createJob(prompt);
       const img = await waitForImage(job);
       await send(chat, img);
-    } catch (e) {
-      await send(chat, "⚠️ Flux servers busy. Try again in 30 sec.");
+    } catch {
+      await send(chat, "⚠️ Flux queue is busy. Try again in 30 seconds.");
     }
   }
 });
 
-// ===== RAILWAY SERVER =====
-const PORT = process.env.PORT || 3000;
+// ===== RAILWAY PORT =====
+const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("🌐 PIXELMETA HTTP server live on port", PORT);
+  console.log("🚀 PIXELMETA QUEUE ENGINE LIVE on", PORT);
 });
