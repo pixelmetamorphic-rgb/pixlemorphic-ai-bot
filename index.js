@@ -13,7 +13,7 @@ const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
-// ===== KEEP RAILWAY ALIVE =====
+// ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
   res.send("PIXELMETA AI is running 🚀");
 });
@@ -27,18 +27,42 @@ async function send(chat, text) {
   });
 }
 
-// ===== FAL QUEUE: CREATE JOB =====
-async function createJob(prompt) {
-  const r = await fetch("https://fal.run/fal-ai/flux/dev/queue", {
+/* ===============================
+   FAL PAID GPU + QUEUE SYSTEM
+================================ */
+
+// Primary (PAID GPU)
+const FAL_PRO = "https://fal.run/fal-ai/flux-pro";
+
+// Fallback (shared queue)
+const FAL_QUEUE = "https://fal.run/fal-ai/flux/dev/queue";
+
+// ---- Try PRO GPU first ----
+async function tryPro(prompt) {
+  const r = await fetch(FAL_PRO, {
     method: "POST",
     headers: {
       Authorization: `Key ${FAL}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({
-      prompt,
-      image_size: "1024x1024"
-    })
+    body: JSON.stringify({ prompt, image_size: "1024x1024" })
+  });
+
+  if (!r.ok) throw new Error("Pro busy");
+
+  const j = await r.json();
+  return j.images?.[0]?.url;
+}
+
+// ---- Create QUEUE job ----
+async function createQueueJob(prompt) {
+  const r = await fetch(FAL_QUEUE, {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${FAL}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({ prompt, image_size: "1024x1024" })
   });
 
   const j = await r.json();
@@ -46,34 +70,43 @@ async function createJob(prompt) {
   return j.request_id;
 }
 
-// ===== FAL QUEUE: CHECK JOB =====
-async function getJob(id) {
-  const r = await fetch(`https://fal.run/fal-ai/flux/dev/requests/${id}`, {
-    headers: { Authorization: `Key ${FAL}` }
-  });
+// ---- Poll QUEUE job ----
+async function getQueueJob(id) {
+  const r = await fetch(
+    `https://fal.run/fal-ai/flux/dev/requests/${id}`,
+    { headers: { Authorization: `Key ${FAL}` } }
+  );
   return await r.json();
 }
 
-// ===== WAIT FOR IMAGE =====
-async function waitForImage(jobId) {
+// ---- Wait QUEUE ----
+async function waitForQueue(jobId) {
   for (let i = 0; i < 40; i++) {
-    const res = await getJob(jobId);
+    const r = await getQueueJob(jobId);
 
-    if (res.status === "COMPLETED" && res.images?.length) {
-      return res.images[0].url;
+    if (r.status === "COMPLETED" && r.images?.length) {
+      return r.images[0].url;
     }
-
-    if (res.status === "FAILED") {
-      throw new Error("Flux failed");
-    }
+    if (r.status === "FAILED") throw new Error("Failed");
 
     await new Promise(r => setTimeout(r, 3000));
   }
-
-  throw new Error("Flux timeout");
+  throw new Error("Timeout");
 }
 
-// ===== CREDITS =====
+// ---- Smart Generator ----
+async function generateImage(prompt) {
+  try {
+    return await tryPro(prompt);     // Paid GPU
+  } catch {
+    const job = await createQueueJob(prompt);  // Fallback queue
+    return await waitForQueue(job);
+  }
+}
+
+/* ===============================
+   CREDITS
+================================ */
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
   return parseInt(await redis.get(`credits:${id}`) || 0);
@@ -87,7 +120,9 @@ async function useCredits(id, n) {
   return true;
 }
 
-// ===== TELEGRAM WEBHOOK =====
+/* ===============================
+   TELEGRAM WEBHOOK
+================================ */
 app.post("/", async (req, res) => {
   res.sendStatus(200);
 
@@ -112,27 +147,25 @@ app.post("/", async (req, res) => {
 
   if (text.startsWith("/gen ")) {
     const prompt = text.slice(5).trim();
-    if (!prompt) return;
 
     if (!(await useCredits(chat, 2))) {
       await send(chat, "❌ Not enough credits");
       return;
     }
 
-    await send(chat, "🧠 Flux is rendering your image...");
+    await send(chat, "🧠 Generating on GPU...");
 
     try {
-      const job = await createJob(prompt);
-      const img = await waitForImage(job);
+      const img = await generateImage(prompt);
       await send(chat, img);
     } catch {
-      await send(chat, "⚠️ Flux queue is busy. Try again in 30 seconds.");
+      await send(chat, "⚠️ All Flux servers busy. Try again in 30 sec.");
     }
   }
 });
 
-// ===== RAILWAY PORT =====
+// ===== RAILWAY =====
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("🚀 PIXELMETA QUEUE ENGINE LIVE on", PORT);
+  console.log("🚀 PIXELMETA GPU ENGINE LIVE on", PORT);
 });
