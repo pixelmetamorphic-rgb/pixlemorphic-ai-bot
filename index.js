@@ -5,7 +5,6 @@ const Redis = require("ioredis");
 const app = express();
 app.use(express.json());
 
-// ===== ENV =====
 const TG = process.env.TG_TOKEN;
 const FAL = process.env.FAL_API_KEY;
 const REPLICATE = process.env.REPLICATE_API_TOKEN;
@@ -14,7 +13,9 @@ const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
-// ===== Telegram Send =====
+// ===================
+// Telegram send
+// ===================
 async function send(chat, text) {
   await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
     method: "POST",
@@ -23,11 +24,11 @@ async function send(chat, text) {
   });
 }
 
-// ==================
-// REPLICATE (PRIMARY)
-// ==================
+// ===================
+// Replicate (PRIMARY)
+// ===================
 async function replicateGenerate(prompt) {
-  const r = await fetch("https://api.replicate.com/v1/predictions", {
+  const start = await fetch("https://api.replicate.com/v1/predictions", {
     method: "POST",
     headers: {
       Authorization: `Token ${REPLICATE}`,
@@ -39,26 +40,27 @@ async function replicateGenerate(prompt) {
     })
   });
 
-  const j = await r.json();
-  if (!j.id) throw new Error("Replicate failed");
+  const job = await start.json();
+  if (!job.id) throw new Error("Replicate start failed");
 
   for (let i = 0; i < 40; i++) {
-    const p = await fetch(`https://api.replicate.com/v1/predictions/${j.id}`, {
+    await new Promise(r => setTimeout(r, 3000));
+
+    const r = await fetch(`https://api.replicate.com/v1/predictions/${job.id}`, {
       headers: { Authorization: `Token ${REPLICATE}` }
     });
-    const s = await p.json();
+    const s = await r.json();
 
     if (s.status === "succeeded") return s.output[0];
     if (s.status === "failed") throw new Error("Replicate failed");
-
-    await new Promise(r => setTimeout(r, 3000));
   }
+
   throw new Error("Replicate timeout");
 }
 
-// ==================
-// FAL SCHNELL (BACKUP)
-// ==================
+// ===================
+// FAL (BACKUP)
+// ===================
 async function falGenerate(prompt) {
   const r = await fetch("https://fal.run/fal-ai/flux/schnell", {
     method: "POST",
@@ -70,12 +72,13 @@ async function falGenerate(prompt) {
   });
 
   const j = await r.json();
-  return j.images?.[0]?.url;
+  if (!j.images?.length) throw new Error("FAL failed");
+  return j.images[0].url;
 }
 
-// ==================
-// SMART GENERATOR
-// ==================
+// ===================
+// Smart Generator
+// ===================
 async function generate(prompt) {
   try {
     return await replicateGenerate(prompt);
@@ -84,9 +87,9 @@ async function generate(prompt) {
   }
 }
 
-// ==================
-// CREDITS
-// ==================
+// ===================
+// Credits
+// ===================
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
   return parseInt(await redis.get(`credits:${id}`) || 0);
@@ -100,11 +103,11 @@ async function useCredits(id, n) {
   return true;
 }
 
-// ==================
-// TELEGRAM WEBHOOK
-// ==================
+// ===================
+// Telegram Webhook
+// ===================
 app.post("/", async (req, res) => {
-  res.sendStatus(200);
+  res.sendStatus(200); // VERY IMPORTANT
 
   const msg = req.body.message;
   if (!msg || !msg.text) return;
@@ -126,7 +129,8 @@ app.post("/", async (req, res) => {
   }
 
   if (text.startsWith("/gen ")) {
-    const prompt = text.slice(5);
+    const prompt = text.slice(5).trim();
+    if (!prompt) return;
 
     if (!(await useCredits(chat, 2))) {
       await send(chat, "❌ Not enough credits");
@@ -135,17 +139,17 @@ app.post("/", async (req, res) => {
 
     await send(chat, "🎨 Generating your image...");
 
-    try {
-      const img = await generate(prompt);
-      await send(chat, img);
-    } catch {
-      await send(chat, "⚠️ All engines failed. Try again.");
-    }
+    // 🔥 Background job (no blocking)
+    generate(prompt)
+      .then(img => send(chat, img))
+      .catch(() => send(chat, "⚠️ Generation failed. Try again."));
   }
 });
 
-// ===== RAILWAY =====
+// ===================
+// Railway
+// ===================
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
-  console.log("🚀 PIXELMETA HYBRID ENGINE LIVE");
+  console.log("🚀 PIXELMETA HYBRID ENGINE LIVE on", PORT);
 });
