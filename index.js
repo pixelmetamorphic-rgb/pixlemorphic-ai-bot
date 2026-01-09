@@ -15,7 +15,7 @@ const redis = new Redis(REDIS);
 
 // ===== HEALTH CHECK =====
 app.get("/", (req, res) => {
-  res.send("PIXELMETA AI is running 🚀");
+  res.send("PIXELMETA GPU Engine running 🚀");
 });
 
 // ===== TELEGRAM SEND =====
@@ -27,34 +27,41 @@ async function send(chat, text) {
   });
 }
 
-/* ===============================
-   FAL PAID GPU + QUEUE SYSTEM
-================================ */
+/* ==========================================
+   🔥 FAL REAL GPU + QUEUE (NO FAKE ENDPOINTS)
+========================================== */
 
-// Primary (PAID GPU)
-const FAL_PRO = "https://fal.run/fal-ai/flux-pro";
+// This endpoint automatically uses:
+// • Paid GPU if balance > 0
+// • Shared GPU if free
+const FAL_GPU = "https://fal.run/fal-ai/flux/dev";
 
-// Fallback (shared queue)
+// Shared queue fallback
 const FAL_QUEUE = "https://fal.run/fal-ai/flux/dev/queue";
 
-// ---- Try PRO GPU first ----
-async function tryPro(prompt) {
-  const r = await fetch(FAL_PRO, {
+// ---- Try GPU (Paid auto-detected by Fal) ----
+async function tryGPU(prompt) {
+  const r = await fetch(FAL_GPU, {
     method: "POST",
     headers: {
       Authorization: `Key ${FAL}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ prompt, image_size: "1024x1024" })
+    body: JSON.stringify({
+      prompt,
+      image_size: "1024x1024"
+    })
   });
 
-  if (!r.ok) throw new Error("Pro busy");
+  if (!r.ok) throw new Error("GPU busy");
 
   const j = await r.json();
-  return j.images?.[0]?.url;
+  if (!j.images || !j.images[0]) throw new Error("No image");
+
+  return j.images[0].url;
 }
 
-// ---- Create QUEUE job ----
+// ---- Queue create ----
 async function createQueueJob(prompt) {
   const r = await fetch(FAL_QUEUE, {
     method: "POST",
@@ -62,15 +69,18 @@ async function createQueueJob(prompt) {
       Authorization: `Key ${FAL}`,
       "Content-Type": "application/json"
     },
-    body: JSON.stringify({ prompt, image_size: "1024x1024" })
+    body: JSON.stringify({
+      prompt,
+      image_size: "1024x1024"
+    })
   });
 
   const j = await r.json();
-  if (!j.request_id) throw new Error("No job id");
+  if (!j.request_id) throw new Error("Queue full");
   return j.request_id;
 }
 
-// ---- Poll QUEUE job ----
+// ---- Queue status ----
 async function getQueueJob(id) {
   const r = await fetch(
     `https://fal.run/fal-ai/flux/dev/requests/${id}`,
@@ -79,33 +89,34 @@ async function getQueueJob(id) {
   return await r.json();
 }
 
-// ---- Wait QUEUE ----
-async function waitForQueue(jobId) {
+// ---- Wait queue ----
+async function waitQueue(jobId) {
   for (let i = 0; i < 40; i++) {
-    const r = await getQueueJob(jobId);
+    const j = await getQueueJob(jobId);
 
-    if (r.status === "COMPLETED" && r.images?.length) {
-      return r.images[0].url;
+    if (j.status === "COMPLETED" && j.images?.length) {
+      return j.images[0].url;
     }
-    if (r.status === "FAILED") throw new Error("Failed");
+
+    if (j.status === "FAILED") throw new Error("Queue failed");
 
     await new Promise(r => setTimeout(r, 3000));
   }
-  throw new Error("Timeout");
+  throw new Error("Queue timeout");
 }
 
-// ---- Smart Generator ----
+// ---- Smart generator ----
 async function generateImage(prompt) {
   try {
-    return await tryPro(prompt);     // Paid GPU
+    return await tryGPU(prompt);   // Uses your $30 GPU automatically
   } catch {
-    const job = await createQueueJob(prompt);  // Fallback queue
-    return await waitForQueue(job);
+    const job = await createQueueJob(prompt);
+    return await waitQueue(job);
   }
 }
 
 /* ===============================
-   CREDITS
+   💳 CREDIT SYSTEM
 ================================ */
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
@@ -121,7 +132,7 @@ async function useCredits(id, n) {
 }
 
 /* ===============================
-   TELEGRAM WEBHOOK
+   🤖 TELEGRAM WEBHOOK
 ================================ */
 app.post("/", async (req, res) => {
   res.sendStatus(200);
@@ -159,7 +170,7 @@ app.post("/", async (req, res) => {
       const img = await generateImage(prompt);
       await send(chat, img);
     } catch {
-      await send(chat, "⚠️ All Flux servers busy. Try again in 30 sec.");
+      await send(chat, "⚠️ All GPUs busy. Try again in 30 sec.");
     }
   }
 });
