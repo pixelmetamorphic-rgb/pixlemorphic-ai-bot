@@ -5,120 +5,147 @@ const Redis = require("ioredis");
 const app = express();
 app.use(express.json());
 
+// ===== ENV =====
 const TG = process.env.TG_TOKEN;
-const OPENAI = process.env.OPENAI_KEY;
 const FAL = process.env.FAL_API_KEY;
+const REPLICATE = process.env.REPLICATE_API_TOKEN;
 const REDIS = process.env.REDIS_URL;
 const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
-// ===== Keep alive =====
-app.get("/", (req,res)=>res.send("PIXELMETA AUTO ENGINE LIVE 🚀"));
-
-// ===== Telegram =====
-async function send(chat, text){
-  await fetch(`https://api.telegram.org/bot${TG}/sendMessage`,{
-    method:"POST",
-    headers:{"Content-Type":"application/json"},
-    body:JSON.stringify({chat_id:chat,text})
+// ===== Telegram Send =====
+async function send(chat, text) {
+  await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ chat_id: chat, text })
   });
 }
 
-// ===== Model Router =====
-function chooseModel(prompt){
-  const real = ["realistic","photo","human","face","product","4k","ultra","hd"];
-  return real.some(w=>prompt.toLowerCase().includes(w)) ? "openai" : "flux";
-}
-
-// ===== OpenAI 1.5 =====
-async function genOpenAI(prompt){
-  const r = await fetch("https://api.openai.com/v1/images/generations",{
-    method:"POST",
-    headers:{
-      "Authorization":`Bearer ${OPENAI}`,
-      "Content-Type":"application/json"
+// ==================
+// REPLICATE (PRIMARY)
+// ==================
+async function replicateGenerate(prompt) {
+  const r = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Token ${REPLICATE}`,
+      "Content-Type": "application/json"
     },
-    body:JSON.stringify({
-      model:"gpt-image-1",
-      prompt,
-      size:"1024x1024"
+    body: JSON.stringify({
+      version: "stability-ai/sdxl",
+      input: { prompt }
     })
   });
+
   const j = await r.json();
-  return j.data[0].url;
+  if (!j.id) throw new Error("Replicate failed");
+
+  for (let i = 0; i < 40; i++) {
+    const p = await fetch(`https://api.replicate.com/v1/predictions/${j.id}`, {
+      headers: { Authorization: `Token ${REPLICATE}` }
+    });
+    const s = await p.json();
+
+    if (s.status === "succeeded") return s.output[0];
+    if (s.status === "failed") throw new Error("Replicate failed");
+
+    await new Promise(r => setTimeout(r, 3000));
+  }
+  throw new Error("Replicate timeout");
 }
 
-// ===== Flux Schnell =====
-async function genFlux(prompt){
-  const r = await fetch("https://fal.run/fal-ai/flux/schnell",{
-    method:"POST",
-    headers:{
-      Authorization:`Key ${FAL}`,
-      "Content-Type":"application/json"
+// ==================
+// FAL SCHNELL (BACKUP)
+// ==================
+async function falGenerate(prompt) {
+  const r = await fetch("https://fal.run/fal-ai/flux/schnell", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${FAL}`,
+      "Content-Type": "application/json"
     },
-    body:JSON.stringify({prompt,image_size:"1024x1024"})
+    body: JSON.stringify({ prompt, image_size: "1024x1024" })
   });
+
   const j = await r.json();
-  return j.images[0].url;
+  return j.images?.[0]?.url;
 }
 
-// ===== Credits =====
-async function getCredits(id){
-  if(id===ADMIN) return 999999;
-  return parseInt(await redis.get(`credits:${id}`)||0);
+// ==================
+// SMART GENERATOR
+// ==================
+async function generate(prompt) {
+  try {
+    return await replicateGenerate(prompt);
+  } catch {
+    return await falGenerate(prompt);
+  }
 }
-async function useCredits(id,n){
-  if(id===ADMIN) return true;
+
+// ==================
+// CREDITS
+// ==================
+async function getCredits(id) {
+  if (id === ADMIN) return 999999;
+  return parseInt(await redis.get(`credits:${id}`) || 0);
+}
+
+async function useCredits(id, n) {
+  if (id === ADMIN) return true;
   const c = await getCredits(id);
-  if(c<n) return false;
-  await redis.decrby(`credits:${id}`,n);
+  if (c < n) return false;
+  await redis.decrby(`credits:${id}`, n);
   return true;
 }
 
-// ===== Webhook =====
-app.post("/", async(req,res)=>{
+// ==================
+// TELEGRAM WEBHOOK
+// ==================
+app.post("/", async (req, res) => {
   res.sendStatus(200);
+
   const msg = req.body.message;
-  if(!msg || !msg.text) return;
+  if (!msg || !msg.text) return;
 
   const chat = msg.chat.id.toString();
   const text = msg.text.trim();
 
-  if(text==="/start"){
-    if(!(await redis.get(`credits:${chat}`)) && chat!==ADMIN){
-      await redis.set(`credits:${chat}`,40);
+  if (text === "/start") {
+    if (!(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
+      await redis.set(`credits:${chat}`, 40);
     }
-    await send(chat,"🚀 PIXELMETA AI\nUse /gen <prompt>");
+    await send(chat, "🚀 PIXELMETA AI\nUse /gen <prompt>");
     return;
   }
 
-  if(text==="/credits"){
-    await send(chat,`💳 Credits: ${await getCredits(chat)}`);
+  if (text === "/credits") {
+    await send(chat, `💳 Credits: ${await getCredits(chat)}`);
     return;
   }
 
-  if(text.startsWith("/gen ")){
+  if (text.startsWith("/gen ")) {
     const prompt = text.slice(5);
 
-    if(!(await useCredits(chat,2))){
-      await send(chat,"❌ Not enough credits");
+    if (!(await useCredits(chat, 2))) {
+      await send(chat, "❌ Not enough credits");
       return;
     }
 
-    await send(chat,"🧠 Generating image...");
+    await send(chat, "🎨 Generating your image...");
 
-    try{
-      const engine = chooseModel(prompt);
-      const img = engine==="openai" ? await genOpenAI(prompt) : await genFlux(prompt);
-      await send(chat,img);
-    }catch{
-      await send(chat,"⚠️ Generation failed. Try again.");
+    try {
+      const img = await generate(prompt);
+      await send(chat, img);
+    } catch {
+      await send(chat, "⚠️ All engines failed. Try again.");
     }
   }
 });
 
-// ===== Railway =====
-app.listen(process.env.PORT||8080, ()=>{
-  console.log("PIXELMETA AUTO ENGINE RUNNING");
+// ===== RAILWAY =====
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => {
+  console.log("🚀 PIXELMETA HYBRID ENGINE LIVE");
 });
