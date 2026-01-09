@@ -13,6 +13,11 @@ const ADMIN = "1078816855";
 
 const redis = new Redis(REDIS);
 
+// ===== HEALTH CHECK (Railway keep-alive) =====
+app.get("/", (req, res) => {
+  res.send("PIXELMETA AI is running 🚀");
+});
+
 // ===== TELEGRAM SEND =====
 async function send(chat, text) {
   await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
@@ -50,7 +55,7 @@ async function getJob(id) {
 
 // ===== WAIT FOR IMAGE =====
 async function waitForImage(jobId) {
-  for (let i = 0; i < 20; i++) {
+  for (let i = 0; i < 30; i++) {
     const res = await getJob(jobId);
 
     if (res.status === "COMPLETED") {
@@ -58,12 +63,13 @@ async function waitForImage(jobId) {
     }
 
     if (res.status === "FAILED") {
-      throw "Flux failed";
+      throw new Error("Flux failed");
     }
 
     await new Promise(r => setTimeout(r, 3000));
   }
-  throw "Timeout";
+
+  throw new Error("Timeout");
 }
 
 // ===== CREDITS =====
@@ -82,7 +88,7 @@ async function useCredits(id, n) {
 
 // ===== TELEGRAM WEBHOOK =====
 app.post("/", async (req, res) => {
-  res.sendStatus(200); // VERY IMPORTANT
+  res.sendStatus(200); // Railway + Telegram safety
 
   const msg = req.body.message;
   if (!msg) return;
@@ -99,12 +105,12 @@ app.post("/", async (req, res) => {
   }
 
   if (text === "/credits") {
-    await send(chat, `Credits: ${await getCredits(chat)}`);
+    await send(chat, `💳 Credits: ${await getCredits(chat)}`);
     return;
   }
 
   if (text.startsWith("/gen ")) {
-    const prompt = text.replace("/gen ", "");
+    const prompt = text.replace("/gen ", "").trim();
 
     if (!(await useCredits(chat, 2))) {
       await send(chat, "❌ Not enough credits");
@@ -117,14 +123,14 @@ app.post("/", async (req, res) => {
       const job = await createJob(prompt);
       const img = await waitForImage(job);
       await send(chat, img);
-    } catch {
+    } catch (e) {
       await send(chat, "⚠️ Flux servers busy. Try again in 30 sec.");
     }
   }
 });
 
-// ===== RAILWAY PORT =====
+// ===== RAILWAY SERVER =====
 const PORT = process.env.PORT || 3000;
 app.listen(PORT, () => {
-  console.log("🚀 PIXELMETA FLUX QUEUE LIVE on", PORT);
+  console.log("🌐 PIXELMETA HTTP server live on port", PORT);
 });
