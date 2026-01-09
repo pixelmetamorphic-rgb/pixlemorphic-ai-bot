@@ -1,152 +1,263 @@
 const express = require("express");
-const fetch = require("node-fetch");
 const Redis = require("ioredis");
 
 const app = express();
-app.use(express.json());
+app.use(express.json({ limit: "2mb" }));
 
 const TG = process.env.TG_TOKEN;
 const REPLICATE = process.env.REPLICATE_API_TOKEN;
-const FAL = process.env.FAL_API_KEY;
-const REDIS = process.env.REDIS_URL;
-const ADMIN = "1078816855";
+const FAL = process.env.FAL_API_KEY || process.env.FAL_KEY; // support both
+const REDIS_URL = process.env.REDIS_URL;
 
-const redis = new Redis(REDIS);
+const ADMIN = process.env.ADMIN_ID || "1078816855";
 
-// Telegram send
-async function send(chat, text) {
-  await fetch(`https://api.telegram.org/bot${TG}/sendMessage`, {
+// Use native fetch if available (Node 18+), else fallback to node-fetch
+const fetchFn =
+  global.fetch?.bind(global) ||
+  ((...args) => import("node-fetch").then(({ default: fetch }) => fetch(...args)));
+
+const redis = REDIS_URL ? new Redis(REDIS_URL) : null;
+if (redis) {
+  // prevent crash on redis connection errors
+  redis.on("error", (err) => console.error("Redis error:", err?.message || err));
+}
+
+// ---------- Telegram helpers ----------
+async function tgCall(method, payload) {
+  if (!TG) throw new Error("Missing TG_TOKEN");
+
+  const r = await fetchFn(`https://api.telegram.org/bot${TG}/${method}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ chat_id: chat, text })
-  });
-}
-
-// ================= REPLICATE (SDXL) =================
-async function replicateGenerate(prompt) {
-  const r = await fetch("https://api.replicate.com/v1/predictions", {
-    method: "POST",
-    headers: {
-      Authorization: `Token ${REPLICATE}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({
-      version: "39ed52f2a78e934b3ba6f1f50c7b07c7a1c77d9b29b19a70c2b6c38b1f86c7c5", // SDXL
-      input: { prompt }
-    })
+    body: JSON.stringify(payload),
   });
 
-  const j = await r.json();
-  if (!j.id) throw new Error("replicate-start-failed");
+  const j = await r.json().catch(() => ({}));
 
-  for (let i = 0; i < 30; i++) {
-    await new Promise(r => setTimeout(r, 3000));
-
-    const p = await fetch(`https://api.replicate.com/v1/predictions/${j.id}`, {
-      headers: { Authorization: `Token ${REPLICATE}` }
-    });
-    const s = await p.json();
-
-    if (s.status === "succeeded") return s.output[0];
-    if (s.status === "failed") throw new Error("replicate-failed");
+  if (!r.ok || j.ok === false) {
+    throw new Error(`Telegram ${method} failed: ${r.status} ${JSON.stringify(j)}`);
   }
-
-  throw new Error("replicate-timeout");
+  return j.result;
 }
 
-// ================= FAL FLUX (BACKUP) =================
-async function falGenerate(prompt) {
-  const submit = await fetch("https://fal.run/fal-ai/flux/schnell/submit", {
-    method: "POST",
-    headers: {
-      Authorization: `Key ${FAL}`,
-      "Content-Type": "application/json"
-    },
-    body: JSON.stringify({ prompt })
-  });
-
-  const job = await submit.json();
-  if (!job.request_id) throw new Error("fal-submit-failed");
-
-  for (let i = 0; i < 25; i++) {
-    await new Promise(r => setTimeout(r, 2000));
-
-    const r = await fetch(`https://fal.run/fal-ai/flux/schnell/result/${job.request_id}`, {
-      headers: { Authorization: `Key ${FAL}` }
-    });
-    const j = await r.json();
-
-    if (j.status === "completed") return j.images[0].url;
-    if (j.status === "failed") throw new Error("fal-failed");
-  }
-
-  throw new Error("fal-timeout");
+async function sendMessage(chatId, text) {
+  return tgCall("sendMessage", { chat_id: chatId, text });
 }
 
-// ================= SMART ENGINE =================
-async function generate(prompt) {
-  try {
-    return await replicateGenerate(prompt);
-  } catch {
-    return await falGenerate(prompt);
-  }
+async function sendPhoto(chatId, photoUrl, caption) {
+  return tgCall("sendPhoto", { chat_id: chatId, photo: photoUrl, caption });
 }
 
-// ================= CREDITS =================
+// ---------- Credits ----------
 async function getCredits(id) {
   if (id === ADMIN) return 999999;
-  return parseInt(await redis.get(`credits:${id}`) || 0);
+  if (!redis) return 0;
+
+  const v = await redis.get(`credits:${id}`);
+  const n = parseInt(v ?? "0", 10);
+  return Number.isFinite(n) ? n : 0;
+}
+
+async function addCredits(id, n) {
+  if (id === ADMIN) return;
+  if (!redis) return;
+  await redis.incrby(`credits:${id}`, n);
 }
 
 async function useCredits(id, n) {
   if (id === ADMIN) return true;
+
   const c = await getCredits(id);
   if (c < n) return false;
+
   await redis.decrby(`credits:${id}`, n);
   return true;
 }
 
-// ================= TELEGRAM =================
-app.post("/", async (req, res) => {
-  res.sendStatus(200);
-  const msg = req.body.message;
-  if (!msg || !msg.text) return;
+// ---------- Output normalizer ----------
+function pickFirstImageUrl(output) {
+  if (!output) return null;
 
-  const chat = msg.chat.id.toString();
-  const text = msg.text.trim();
+  if (typeof output === "string") return output;
+  if (Array.isArray(output)) return output[0] ?? null;
 
-  if (text === "/start") {
-    if (!(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
-      await redis.set(`credits:${chat}`, 40);
+  if (typeof output === "object") {
+    if (typeof output.url === "string") return output.url;
+    if (typeof output.image === "string") return output.image;
+
+    if (Array.isArray(output.images)) {
+      const first = output.images[0];
+      if (typeof first === "string") return first;
+      if (first && typeof first.url === "string") return first.url;
     }
-    await send(chat, "🚀 PIXELMETA AI\nUse /gen <prompt>");
-    return;
   }
 
-  if (text === "/credits") {
-    await send(chat, `💳 Credits: ${await getCredits(chat)}`);
-    return;
+  return null;
+}
+
+// ---------- Replicate (SDXL) ----------
+const REPLICATE_SDXL_VERSION =
+  "39ed52f2a78e934b3ba6f1f50c7b07c7a1c77d9b29b19a70c2b6c38b1f86c7c5";
+
+async function replicateGenerate(prompt) {
+  if (!REPLICATE) throw new Error("Missing REPLICATE_API_TOKEN");
+
+  // Use sync mode (wait up to 60s) when possible
+  const r = await fetchFn("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${REPLICATE}`, // IMPORTANT (not Token)
+      "Content-Type": "application/json",
+      Prefer: "wait=60",
+    },
+    body: JSON.stringify({
+      version: REPLICATE_SDXL_VERSION,
+      input: { prompt },
+    }),
+  });
+
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(`Replicate create failed: ${r.status} ${j.detail || j.error || JSON.stringify(j)}`);
   }
 
-  if (text.startsWith("/gen ")) {
-    const prompt = text.slice(5);
+  // If sync returned output right away
+  const immediate = pickFirstImageUrl(j.output);
+  if (immediate) return immediate;
 
-    if (!(await useCredits(chat, 2))) {
-      await send(chat, "❌ Not enough credits");
+  // Otherwise poll
+  const getUrl = j.urls?.get || (j.id ? `https://api.replicate.com/v1/predictions/${j.id}` : null);
+  if (!getUrl) throw new Error("Replicate response missing prediction id/urls.get");
+
+  for (let i = 0; i < 40; i++) {
+    await new Promise((x) => setTimeout(x, 2000));
+
+    const pr = await fetchFn(getUrl, {
+      headers: { Authorization: `Bearer ${REPLICATE}` },
+    });
+
+    const s = await pr.json().catch(() => ({}));
+
+    const out = pickFirstImageUrl(s.output);
+    if (out) return out;
+
+    const status = String(s.status || "").toLowerCase();
+    if (["failed", "canceled", "cancelled"].includes(status)) {
+      throw new Error(`Replicate ${status}: ${s.error || "unknown error"}`);
+    }
+
+    // handle newer success naming too
+    if (["successful", "completed", "succeeded"].includes(status) && !out) {
+      throw new Error(`Replicate finished (${status}) but no output found`);
+    }
+  }
+
+  throw new Error("Replicate timeout");
+}
+
+// ---------- fal.ai (FLUX schnell) ----------
+async function falGenerate(prompt) {
+  if (!FAL) throw new Error("Missing FAL_API_KEY (or FAL_KEY)");
+
+  // Correct synchronous endpoint:
+  // POST https://fal.run/{model_id} with Authorization: Key ... 
+  const r = await fetchFn("https://fal.run/fal-ai/flux/schnell", {
+    method: "POST",
+    headers: {
+      Authorization: `Key ${FAL}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      prompt,
+      num_images: 1,
+    }),
+  });
+
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) {
+    throw new Error(`fal failed: ${r.status} ${j.detail || j.error || JSON.stringify(j)}`);
+  }
+
+  const url = j?.images?.[0]?.url;
+  if (!url) throw new Error("fal returned no images[0].url");
+
+  return url;
+}
+
+// ---------- Smart engine ----------
+async function generate(prompt) {
+  try {
+    return await replicateGenerate(prompt);
+  } catch (err) {
+    console.error("Replicate failed, falling back to fal:", err?.message || err);
+    return await falGenerate(prompt);
+  }
+}
+
+// ---------- Railway health ----------
+app.get("/", (req, res) => res.status(200).send("ok"));
+
+// ---------- Telegram webhook ----------
+app.post("/", async (req, res) => {
+  res.sendStatus(200); // respond fast to Telegram
+
+  try {
+    const msg = req.body?.message;
+    if (!msg?.text) return;
+
+    const chat = String(msg.chat.id);
+    const text = msg.text.trim();
+
+    if (text === "/start") {
+      if (redis && !(await redis.get(`credits:${chat}`)) && chat !== ADMIN) {
+        await redis.set(`credits:${chat}`, 40);
+      }
+      await sendMessage(chat, "🚀 PIXELMETA AI\nUse /gen <prompt>\n/credits");
       return;
     }
 
-    await send(chat, "🎨 Generating image...");
-
-    try {
-      const img = await generate(prompt);
-      await send(chat, img);
-    } catch {
-      await send(chat, "⚠️ Generation failed. Try again.");
+    if (text === "/credits") {
+      await sendMessage(chat, `💳 Credits: ${await getCredits(chat)}`);
+      return;
     }
+
+    if (text.startsWith("/gen ")) {
+      const prompt = text.slice(5).trim();
+      if (!prompt) {
+        await sendMessage(chat, "Usage: /gen <prompt>");
+        return;
+      }
+
+      if (!(await useCredits(chat, 2))) {
+        await sendMessage(chat, "❌ Not enough credits");
+        return;
+      }
+
+      await sendMessage(chat, "🎨 Generating image...");
+
+      try {
+        const imgUrl = await generate(prompt);
+        await sendPhoto(chat, imgUrl, "✅ Done");
+      } catch (err) {
+        // refund if generation failed
+        await addCredits(chat, 2);
+
+        console.error("Generation failed:", err?.message || err);
+        await sendMessage(chat, "⚠️ Generation failed. Try again.");
+
+        // Optional: notify admin with exact error
+        if (chat !== ADMIN) {
+          await sendMessage(
+            ADMIN,
+            `⚠️ Gen failed\nUser: ${chat}\nPrompt: ${prompt}\nError: ${err?.message || err}`
+          );
+        }
+      }
+    }
+  } catch (err) {
+    console.error("Webhook handler error:", err?.message || err);
   }
 });
 
-app.listen(process.env.PORT || 8080, () => {
-  console.log("🚀 PIXELMETA HYBRID ENGINE LIVE");
-});
+const PORT = process.env.PORT || 8080;
+app.listen(PORT, () => console.log("🚀 PIXELMETA HYBRID ENGINE LIVE"));
