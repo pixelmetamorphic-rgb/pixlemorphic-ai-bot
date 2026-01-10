@@ -1,47 +1,61 @@
 "use strict";
 
 /**
- * PIXELMETA AI - Production Index
+ * PIXELMETA AI - Production Index (UPDATED + FIXED)
  * Admin ID: 1078816855
  *
- * Features:
- * - /gen guided UI (model -> quality -> prompt)
- * - /gen <prompt> quick mode with smart auto-detect (model + quality)
- * - Plans + Credits + Locks (Trial/Promo/Paid/Admin)
- * - Credits deducted only on SUCCESS
- * - Replicate SDXL (primary for Realism) + FAL Flux Schnell (primary for Cinematic, fallback)
- * - Rate limit + Busy lock + Ban system
- * - Admin commands
+ * ✅ Fixes + Upgrades:
+ * - Telegram 429 flood limit safe: global throttle + retry_after auto retry
+ * - Global generation concurrency limiter (handles 50–100+ users better)
+ * - Ultra 8K is REAL 8K: Flux Ultra base + Topaz upscale 4× (never empty model)
+ * - Pixlemeta Realism upgraded to DSLR-level realism (Flux Ultra RAW + Topaz for 4K)
+ * - Pixlemeta Shark V1 (8K Killer): Nano Banana Pro Edit + Topaz 4× upscale to 8K
+ * - Shark supports image-to-image: user sends image, then /shark <prompt>
+ * - Admin stats + broadcast (safe, no 429 crashes)
+ * - Credits are deducted ONLY after success
+ *
+ * NOTE:
+ * - "Better than Midjourney" is a subjective claim. What we implement here is a
+ *   premium-quality pipeline designed for *flagship-grade* edits + 8K output.
  */
 
 const express = require("express");
 const Redis = require("ioredis");
 
 const app = express();
-app.use(express.json({ limit: "2mb" }));
+app.use(express.json({ limit: "4mb" }));
 app.disable("x-powered-by");
 
 // ------------------ ENV ------------------
 const TG_TOKEN = process.env.TG_TOKEN;
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const FAL_API_KEY = process.env.FAL_API_KEY || process.env.FAL_KEY;
+const FAL_API_KEY = (process.env.FAL_API_KEY || process.env.FAL_KEY || "").trim();
 const REDIS_URL = process.env.REDIS_URL;
 
 const TG_SECRET_TOKEN = process.env.TG_SECRET_TOKEN; // optional webhook protection
-const FAL_FLUX_PRO_MODEL = process.env.FAL_FLUX_PRO_MODEL; // optional later
+
+// ✅ Hard fallback so model never becomes empty
+const FAL_FLUX_PRO_MODEL =
+  (process.env.FAL_FLUX_PRO_MODEL || "").trim() || "fal-ai/flux-pro/v1.1-ultra";
 
 const PORT = process.env.PORT || 8080;
 
 // Admin
 const ADMIN_ID = "1078816855";
 
-// Replicate SDXL version (you already used)
+// Replicate SDXL version (your current)
 const REPLICATE_SDXL_VERSION =
   "39ed52f2a78e934b3ba6f1f50c7b07c7a1c77d9b29b19a70c2b6c38b1f86c7c5";
 
-// Basic limits
+// Limits
 const MAX_PROMPT_LEN = 900;
-const BUSY_LOCK_SECONDS = 120;
+const BUSY_LOCK_SECONDS = 180;
+
+// ✅ Global generation concurrency (safe for big user load)
+const GLOBAL_GEN_LIMIT = parseInt(process.env.GLOBAL_GEN_LIMIT || "3", 10);
+
+// ✅ Telegram throttle (avoid 429)
+const TG_MIN_GAP_MS = parseInt(process.env.TG_MIN_GAP_MS || "70", 10);
 
 // ------------------ FETCH (Node18+ or fallback) ------------------
 const fetchFn =
@@ -64,6 +78,13 @@ const PLAN_DEFAULT_CREDITS = {
   admin: 999999999
 };
 
+/**
+ * MODELS:
+ * - cinematic: quick fast cinematic
+ * - realism: DSLR realism 2K/4K
+ * - ultra8k: true 8K (Flux Ultra base + Topaz 4×)
+ * - shark: premium edit pipeline 2K/4K/8K
+ */
 const MODELS = {
   cinematic: {
     key: "cinematic",
@@ -75,38 +96,39 @@ const MODELS = {
     },
     engines: { primary: "fal_schnell", backup: null }
   },
+
   realism: {
     key: "realism",
-    label: "📸 Pixlemeta Realism",
+    label: "📸 Pixlemeta Realism (DSLR)",
     type: "t2i",
     qualities: {
-      "2k": { cost: 4 },
-      "4k": { cost: 10 }
+      "2k": { cost: 6 },  // upgraded
+      "4k": { cost: 15 }  // your target
     },
-    engines: { primary: "replicate_sdxl", backup: "fal_schnell" }
+    engines: { primary: "fal_flux_ultra_realism", backup: "replicate_sdxl" }
   },
+
   ultra8k: {
     key: "ultra8k",
-    label: "🟪 Pixlemeta Ultra 8K",
+    label: "🟪 Pixlemeta Ultra 8K (True)",
     type: "t2i",
     qualities: {
-      "8k": { cost: 10 }
+      "8k": { cost: 30 } // realistic premium pricing
     },
-    engines: { primary: "fal_flux_pro", backup: null }
+    engines: { primary: "fal_flux_pro_8k", backup: null }
   },
-  edit: {
-    key: "edit",
-    label: "🟥 Pixlemeta EDIT",
-    type: "i2i",
-    cost: 80,
-    engines: { primary: "openai_edit", backup: null }
-  },
+
+  // ✅ Shark V1 - premium i2i edit + upscale (2K/4K/8K)
   shark: {
     key: "shark",
-    label: "🦈 Pixlemeta SHARK V1",
+    label: "🦈 Pixlemeta SHARK V1 (Premium Edit)",
     type: "i2i",
-    cost: 140,
-    engines: { primary: "shark_pipeline", backup: null }
+    qualities: {
+      "2k": { cost: 15 },
+      "4k": { cost: 25 },
+      "8k": { cost: 45 } // 8K killer tier
+    },
+    engines: { primary: "shark_v1_edit", backup: null }
   }
 };
 
@@ -136,9 +158,28 @@ function safeInt(x, fallback = 0) {
   return Number.isFinite(n) ? n : fallback;
 }
 
-// ------------------ TELEGRAM API ------------------
-async function tgCall(method, payload) {
+// ------------------ TELEGRAM API (SAFE) ------------------
+let TG_NEXT_ALLOWED_TS = 0;
+async function tgThrottle() {
+  const minGapMs = TG_MIN_GAP_MS;
+  const t = Date.now();
+  if (t < TG_NEXT_ALLOWED_TS) await sleep(TG_NEXT_ALLOWED_TS - t);
+  TG_NEXT_ALLOWED_TS = Date.now() + minGapMs;
+}
+
+function extractRetryAfterSec(j) {
+  return (
+    j?.parameters?.retry_after ||
+    j?.response_parameters?.retry_after ||
+    null
+  );
+}
+
+async function tgCall(method, payload, attempt = 0) {
   if (!TG_TOKEN) throw new Error("Missing TG_TOKEN");
+
+  // throttle to reduce 429
+  await tgThrottle();
 
   const r = await fetchFn(`https://api.telegram.org/bot${TG_TOKEN}/${method}`, {
     method: "POST",
@@ -147,10 +188,20 @@ async function tgCall(method, payload) {
   });
 
   const j = await r.json().catch(() => ({}));
-  if (!r.ok || j.ok === false) {
-    throw new Error(`Telegram ${method} failed: ${r.status} ${JSON.stringify(j)}`);
+
+  if (r.ok && j.ok !== false) return j.result;
+
+  const retryAfter = extractRetryAfterSec(j);
+
+  if (r.status === 429 && retryAfter && attempt < 6) {
+    // metrics
+    await rIncrBy("m:tg_429", 1).catch(() => {});
+    console.warn(`⚠️ Telegram 429: retry_after=${retryAfter}s method=${method}`);
+    await sleep((retryAfter + 1) * 1000);
+    return tgCall(method, payload, attempt + 1);
   }
-  return j.result;
+
+  throw new Error(`Telegram ${method} failed: ${r.status} ${JSON.stringify(j)}`);
 }
 
 async function sendMessage(chatId, text, replyMarkup) {
@@ -167,11 +218,25 @@ async function sendPhoto(chatId, photoUrl, caption) {
   });
 }
 
+async function sendDocument(chatId, fileUrl, caption) {
+  return tgCall("sendDocument", {
+    chat_id: chatId,
+    document: fileUrl,
+    caption: caption || ""
+  });
+}
+
 async function answerCallbackQuery(callbackQueryId, text) {
-  // Prevent "loading..." stuck
   const payload = { callback_query_id: callbackQueryId };
   if (text) payload.text = text;
   return tgCall("answerCallbackQuery", payload);
+}
+
+async function tgGetFileUrl(fileId) {
+  const file = await tgCall("getFile", { file_id: fileId });
+  const path = file?.file_path;
+  if (!path) throw new Error("getFile returned no file_path");
+  return `https://api.telegram.org/file/bot${TG_TOKEN}/${path}`;
 }
 
 // ------------------ REDIS HELPERS ------------------
@@ -198,7 +263,9 @@ async function rIncrBy(key, n) {
 async function ensureUser(chatId) {
   const id = String(chatId);
 
-  // Admin is virtual "admin"
+  // track all users for broadcast/statistics
+  if (redis) await redis.sadd("users", id);
+
   if (isAdmin(id)) {
     await rSet(`plan:${id}`, "admin");
     return;
@@ -225,11 +292,9 @@ async function setPlan(chatId, plan, opts = {}) {
 
   await rSet(`plan:${id}`, plan);
 
-  // Reset credits to plan default (your plan design)
   const credits = PLAN_DEFAULT_CREDITS[plan] ?? 0;
   await rSet(`credits:${id}`, String(credits));
 
-  // Optional expiry support (if you later want)
   if (opts.expiresAt) await rSet(`planexp:${id}`, String(opts.expiresAt));
   else await rDel(`planexp:${id}`);
 }
@@ -268,11 +333,10 @@ async function setBan(chatId, on) {
 
 // ------------------ LOCKS / RATE LIMIT ------------------
 async function rateLimit(chatId) {
-  // 1 request per ~1s per user (silent)
   const id = String(chatId);
   const key = `rl:${id}`;
   const ok = await rSet(key, "1", { ex: 1, nx: true });
-  return ok === "OK"; // true if allowed
+  return ok === "OK";
 }
 
 async function acquireBusy(chatId) {
@@ -287,16 +351,36 @@ async function releaseBusy(chatId) {
   await rDel(`busy:${id}`);
 }
 
+// ✅ global concurrency slots (prevents overload)
+async function acquireGlobalSlot() {
+  const key = "glob:gen";
+  for (let i = 0; i < 60; i++) {
+    const current = safeInt(await rGet(key), 0);
+    if (current < GLOBAL_GEN_LIMIT) {
+      await rIncrBy(key, 1);
+      return true;
+    }
+    await sleep(400);
+  }
+  return false;
+}
+async function releaseGlobalSlot() {
+  await rIncrBy("glob:gen", -1);
+  // guard negative
+  const v = safeInt(await rGet("glob:gen"), 0);
+  if (v < 0) await rSet("glob:gen", "0");
+}
+
 // ------------------ CREDIT COST ------------------
 function getCost(modelKey, qualityKey) {
   const m = MODELS[modelKey];
   if (!m) return null;
 
-  if (m.type === "t2i") {
+  if (m.type === "t2i" || m.type === "i2i") {
     const q = m.qualities?.[qualityKey];
     return q?.cost ?? null;
   }
-  return m.cost ?? null;
+  return null;
 }
 
 function canAccess(plan, modelKey) {
@@ -304,7 +388,7 @@ function canAccess(plan, modelKey) {
   return set.has(modelKey);
 }
 
-// ------------------ SMART PROMPT (complex prompt understanding) ------------------
+// ------------------ SMART PROMPT (UPGRADED) ------------------
 function inferModelQualityFromText(rawText, plan) {
   let text = clampPrompt(rawText);
   const lower = text.toLowerCase();
@@ -314,7 +398,7 @@ function inferModelQualityFromText(rawText, plan) {
   const qMatch = lower.match(/\b(2k|4k|8k)\b/);
   if (qMatch) quality = qMatch[1];
 
-  // Score model intent by keywords
+  // Score intent
   let scoreC = 0;
   let scoreR = 0;
   let scoreU = 0;
@@ -329,9 +413,12 @@ function inferModelQualityFromText(rawText, plan) {
 
   addIf(/\b(anime|manga|fantasy|illustration|digital art|comic)\b/.test(lower), 4, 0, 0);
   addIf(/\b(cinematic|movie|film still|dramatic|hollywood|trailer)\b/.test(lower), 4, 1, 0);
-  addIf(/\b(realistic|photoreal|photo|dslr|portrait|skin|face|product)\b/.test(lower), 0, 5, 0);
+
+  addIf(/\b(realistic|photoreal|photo|dslr|portrait|skin|face|product|headshot)\b/.test(lower), 0, 6, 0);
+  addIf(/\b(pores|freckles|skin tone|texture|wrinkles|natural light|canon|nikon|sony|fuji|leica|a7r|85mm)\b/.test(lower), 0, 7, 0);
+
   addIf(/\b(studio|print|ultra sharp|poster|billboard)\b/.test(lower), 0, 1, 4);
-  addIf(/\b(8k)\b/.test(lower), 0, 1, 6);
+  addIf(/\b(8k)\b/.test(lower), 0, 1, 8);
 
   // Choose model
   let model = "cinematic";
@@ -340,25 +427,22 @@ function inferModelQualityFromText(rawText, plan) {
 
   // Apply plan locks
   if (!canAccess(plan, model)) {
-    // fallback to allowed default
     model = plan === "trial" ? "cinematic" : "realism";
     if (!canAccess(plan, model)) model = "cinematic";
   }
 
-  // Default quality if missing
+  // Default quality
   if (!quality) {
-    quality = model === "ultra8k" ? "8k" : "2k";
+    quality = model === "ultra8k" ? "8k" : model === "realism" ? "4k" : "2k";
   }
 
-  // Clamp quality to model supported qualities
+  // Clamp quality to supported
   const supported = Object.keys(MODELS[model].qualities || {});
   if (!supported.includes(quality)) {
-    // fallback best available
     quality = supported.includes("2k") ? "2k" : supported[0];
   }
 
-  // Clean some routing words (but keep meaning)
-  // (We remove only obvious routing tokens.)
+  // Remove routing tokens only
   text = text
     .replace(/\b(2k|4k|8k)\b/gi, "")
     .replace(/\b(pixlemeta|pixelmeta)\b/gi, "")
@@ -369,7 +453,6 @@ function inferModelQualityFromText(rawText, plan) {
 }
 
 function parseStructuredPrompt(userText) {
-  // Supports inputs like: "subject: lion; lighting: golden hour; camera: 85mm; background: savannah"
   const raw = (userText || "").toString();
   const parts = raw.split(/[;\n]+/).map((s) => s.trim()).filter(Boolean);
 
@@ -396,7 +479,6 @@ function buildPrompt(modelKey, qualityKey, userPrompt) {
 
   const { kv, free } = parseStructuredPrompt(base);
 
-  // If user used structured prompt, we rebuild it nicely:
   const subject = kv.subject || kv.character || kv.person || kv.animal || free || base;
   const background = kv.background || kv.environment || kv.scene || "";
   const lighting = kv.lighting || "";
@@ -406,26 +488,31 @@ function buildPrompt(modelKey, qualityKey, userPrompt) {
 
   const qualityTag =
     qualityKey === "8k"
-      ? "ultra sharp, 8k, print ready"
+      ? "ultra sharp, print ready, extremely detailed"
       : qualityKey === "4k"
-      ? "high detail, 4k"
-      : "high detail";
+      ? "high detail, sharp, professional quality"
+      : "high detail, sharp";
 
-  const commonNo = "no watermark, no logo, no text, no signature, not blurry, no low quality";
+  const commonNo =
+    "no watermark, no logo, no text, no signature, not blurry, no low quality, no oversmooth, no plastic skin, no CGI look";
 
   let preset = "";
   if (modelKey === "cinematic") {
     preset =
       styleUser ||
-      "cinematic movie still, dramatic lighting, volumetric light, depth of field, stylized, masterpiece";
+      "cinematic movie still, dramatic lighting, volumetric light, depth of field, masterpiece, high contrast";
   } else if (modelKey === "realism") {
     preset =
       styleUser ||
-      "photorealistic, DSLR photo, sharp focus, natural skin texture, realistic lighting, ultra detailed";
+      "photorealistic DSLR photo, natural skin texture, realistic pores, accurate skin tone, sharp focus, natural lighting, high dynamic range, filmic tone mapping";
   } else if (modelKey === "ultra8k") {
     preset =
       styleUser ||
-      "studio quality, ultra sharp details, premium commercial photography, extremely detailed";
+      "premium commercial photography, extremely detailed, studio quality, ultra clean, sharp micro-texture, high dynamic range";
+  } else if (modelKey === "shark") {
+    preset =
+      styleUser ||
+      "flagship photo edit, preserve realism, ultra clean DSLR look, accurate skin texture, high fidelity, professional retouching, natural";
   } else {
     preset = styleUser || "high quality, detailed";
   }
@@ -452,6 +539,7 @@ function pickFirstImageUrl(output) {
   if (typeof output === "object") {
     if (typeof output.url === "string") return output.url;
     if (Array.isArray(output.images) && output.images[0]?.url) return output.images[0].url;
+    if (output.image?.url) return output.image.url;
   }
   return null;
 }
@@ -471,6 +559,19 @@ async function falRun(modelId, input) {
   return j;
 }
 
+// ✅ Topaz Upscale
+async function falTopazUpscale(imageUrl, upscaleFactor) {
+  const j = await falRun("fal-ai/topaz/upscale/image", {
+    image_url: imageUrl,
+    upscale_factor: upscaleFactor
+  });
+
+  const url = pickFirstImageUrl(j?.image) || j?.image?.url || j?.images?.[0]?.url;
+  const out = url || pickFirstImageUrl(j);
+  if (!out) throw new Error("topaz returned no image");
+  return out;
+}
+
 async function falSchnellGenerate(prompt) {
   const j = await falRun("fal-ai/flux/schnell", { prompt, num_images: 1 });
   const url = j?.images?.[0]?.url;
@@ -478,14 +579,65 @@ async function falSchnellGenerate(prompt) {
   return url;
 }
 
-async function falFluxProGenerate(prompt) {
-  // You will add your correct model id later in env:
-  // FAL_FLUX_PRO_MODEL="fal-ai/flux-pro" (example)
-  if (!FAL_FLUX_PRO_MODEL) throw new Error("Ultra 8K not configured (missing FAL_FLUX_PRO_MODEL)");
-  const j = await falRun(FAL_FLUX_PRO_MODEL, { prompt, num_images: 1 });
-  const url = j?.images?.[0]?.url;
-  if (!url) throw new Error("fal_flux_pro returned no image");
-  return url;
+// ✅ DSLR Realism engine: Flux Ultra (RAW) + Topaz for 4K
+async function falFluxUltraRealism(prompt, qualityKey) {
+  const j = await falRun("fal-ai/flux-pro/v1.1-ultra", {
+    prompt,
+    num_images: 1,
+    raw: true,
+    enable_safety_checker: true,
+    safety_tolerance: 2
+  });
+
+  const baseUrl = j?.images?.[0]?.url;
+  if (!baseUrl) throw new Error("flux ultra realism returned no image");
+
+  if (qualityKey === "4k") {
+    return falTopazUpscale(baseUrl, 2);
+  }
+  return baseUrl;
+}
+
+// ✅ True 8K engine: Flux Ultra base + Topaz 4×
+async function falFluxProGenerate8K(prompt) {
+  // model id is never empty
+  const j = await falRun(FAL_FLUX_PRO_MODEL, {
+    prompt,
+    num_images: 1,
+    raw: true,
+    enable_safety_checker: true,
+    safety_tolerance: 2
+  });
+
+  const baseUrl = j?.images?.[0]?.url;
+  if (!baseUrl) throw new Error("fal_flux_pro returned no image");
+
+  // 2K-ish -> 8K
+  const up8k = await falTopazUpscale(baseUrl, 4);
+  return up8k;
+}
+
+// ✅ Shark V1 edit engine (Nano Banana Pro Edit) + optional 8K upscale
+async function sharkV1EditPipeline(imageUrl, prompt, qualityKey) {
+  // Nano Banana Pro supports resolution: 1K|2K|4K
+  // We use 2K for quality=2k; 4K for quality=4k or 8k, then upscale to 8k via Topaz
+  const nanoRes = qualityKey === "2k" ? "2K" : "4K";
+
+  const j = await falRun("fal-ai/nano-banana-pro/edit", {
+    prompt,
+    image_urls: [imageUrl],
+    resolution: nanoRes,
+    num_images: 1
+  });
+
+  const edited = j?.images?.[0]?.url;
+  if (!edited) throw new Error("shark v1 returned no image");
+
+  if (qualityKey === "8k") {
+    // 4K edit -> 8K upscale 2×
+    return falTopazUpscale(edited, 2);
+  }
+  return edited;
 }
 
 async function replicateSDXLGenerate(prompt) {
@@ -517,7 +669,6 @@ async function replicateSDXLGenerate(prompt) {
 
   for (let i = 0; i < 45; i++) {
     await sleep(2000);
-
     const pr = await fetchFn(getUrl, {
       headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` }
     });
@@ -531,16 +682,7 @@ async function replicateSDXLGenerate(prompt) {
       throw new Error(`replicate ${status}: ${s?.error || "unknown"}`);
     }
   }
-
   throw new Error("replicate timeout");
-}
-
-// Placeholders for future premium engines
-async function openaiEditPlaceholder() {
-  throw new Error("EDIT is coming soon (engine not connected yet)");
-}
-async function sharkPipelinePlaceholder() {
-  throw new Error("SHARK is coming soon (pipeline not connected yet)");
 }
 
 async function runEngine(engine, payload) {
@@ -548,17 +690,17 @@ async function runEngine(engine, payload) {
     case "fal_schnell":
       return falSchnellGenerate(payload.prompt);
 
+    case "fal_flux_ultra_realism":
+      return falFluxUltraRealism(payload.prompt, payload.qualityKey);
+
+    case "fal_flux_pro_8k":
+      return falFluxProGenerate8K(payload.prompt);
+
+    case "shark_v1_edit":
+      return sharkV1EditPipeline(payload.imageUrl, payload.prompt, payload.qualityKey);
+
     case "replicate_sdxl":
       return replicateSDXLGenerate(payload.prompt);
-
-    case "fal_flux_pro":
-      return falFluxProGenerate(payload.prompt);
-
-    case "openai_edit":
-      return openaiEditPlaceholder();
-
-    case "shark_pipeline":
-      return sharkPipelinePlaceholder();
 
     default:
       throw new Error(`Unknown engine: ${engine}`);
@@ -572,13 +714,11 @@ async function generateWithModel(modelKey, qualityKey, userPrompt) {
   const smart = buildPrompt(modelKey, qualityKey, userPrompt);
   if (!smart) throw new Error("Empty prompt");
 
-  // Primary engine
   try {
-    return await runEngine(model.engines.primary, { prompt: smart });
+    return await runEngine(model.engines.primary, { prompt: smart, qualityKey });
   } catch (e1) {
-    // Backup engine if exists
     if (model.engines.backup) {
-      return await runEngine(model.engines.backup, { prompt: smart });
+      return await runEngine(model.engines.backup, { prompt: smart, qualityKey });
     }
     throw e1;
   }
@@ -588,7 +728,7 @@ async function generateWithModel(modelKey, qualityKey, userPrompt) {
 function modelsKeyboard(plan) {
   const rows = [];
 
-  for (const key of ["cinematic", "realism", "ultra8k", "edit", "shark"]) {
+  for (const key of ["cinematic", "realism", "ultra8k", "shark"]) {
     const m = MODELS[key];
     const locked = !canAccess(plan, key);
     rows.push([
@@ -600,16 +740,13 @@ function modelsKeyboard(plan) {
   }
 
   rows.push([{ text: "❌ Cancel", callback_data: "x:cancel" }]);
-
   return { inline_keyboard: rows };
 }
 
 function qualityKeyboard(modelKey) {
   const m = MODELS[modelKey];
   const qualities = Object.keys(m.qualities || {});
-  const rows = qualities.map((q) => [
-    { text: q.toUpperCase(), callback_data: `q:${modelKey}:${q}` }
-  ]);
+  const rows = qualities.map((q) => [{ text: q.toUpperCase(), callback_data: `q:${modelKey}:${q}` }]);
   rows.push([{ text: "⬅️ Back", callback_data: "x:back_models" }]);
   rows.push([{ text: "❌ Cancel", callback_data: "x:cancel" }]);
   return { inline_keyboard: rows };
@@ -637,12 +774,11 @@ async function cmdStart(chatId) {
   await ensureUser(chatId);
   const plan = await getPlan(chatId);
   const credits = await getCredits(chatId);
-
   const creditsText = credits === Infinity ? "Unlimited" : String(credits);
 
   await sendMessage(
     chatId,
-    `🚀 PIXELMETA AI\n\nPlan: ${plan.toUpperCase()}\nCredits: ${creditsText}\n\nUse /gen to generate.\nUse /models to see model list.\nUse /credits to check balance.`
+    `🚀 PIXELMETA AI\n\nPlan: ${plan.toUpperCase()}\nCredits: ${creditsText}\n\nCommands:\n/gen - menu\n/gen <prompt> - quick\n/shark <edit prompt> - premium edit (send photo first)\n/models - model list\n/credits - balance`
   );
 }
 
@@ -654,19 +790,6 @@ async function cmdCredits(chatId) {
   await sendMessage(chatId, `💳 Credits: ${creditsText}\nPlan: ${plan.toUpperCase()}`);
 }
 
-async function cmdPlanValidity(chatId) {
-  await ensureUser(chatId);
-  const plan = await getPlan(chatId);
-  const exp = await rGet(`planexp:${chatId}`);
-  if (!exp) {
-    await sendMessage(chatId, `🧾 Plan: ${plan.toUpperCase()}\nValidity: Not set`);
-    return;
-  }
-  const ts = safeInt(exp, 0);
-  const d = new Date(ts);
-  await sendMessage(chatId, `🧾 Plan: ${plan.toUpperCase()}\nValid until: ${d.toISOString()}`);
-}
-
 async function cmdModels(chatId) {
   await ensureUser(chatId);
   const plan = await getPlan(chatId);
@@ -675,24 +798,20 @@ async function cmdModels(chatId) {
   lines.push("🧠 PIXELMETA Models & Costs");
   lines.push("");
 
-  const add = (name, text) => lines.push(`${name}\n${text}\n`);
-
   const lock = (key) => (!canAccess(plan, key) ? " 🔒" : "");
 
-  add(
-    `🎬 Pixlemeta Cinematic${lock("cinematic")}`,
-    `2K = 2 credits\n4K = 4 credits\nEngine: FAL Flux Schnell`
+  lines.push(
+    `🎬 Pixlemeta Cinematic${lock("cinematic")}\n2K = 2 credits\n4K = 4 credits\nEngine: Flux Schnell\n`
   );
-  add(
-    `📸 Pixlemeta Realism${lock("realism")}`,
-    `2K = 4 credits\n4K = 10 credits\nEngine: Replicate SDXL (fallback FAL Schnell)`
+  lines.push(
+    `📸 Pixlemeta Realism DSLR${lock("realism")}\n2K = 6 credits\n4K = 15 credits\nEngine: Flux Ultra RAW + Topaz\n`
   );
-  add(
-    `🟪 Pixlemeta Ultra 8K${lock("ultra8k")}`,
-    `8K = 10 credits\nEngine: FAL Flux Pro`
+  lines.push(
+    `🟪 Pixlemeta Ultra 8K${lock("ultra8k")}\n8K = 30 credits\nEngine: Flux Ultra RAW + Topaz 4×\n`
   );
-  add(`🟥 Pixlemeta EDIT${lock("edit")}`, `80 credits\nEngine: OpenAI (coming soon)`);
-  add(`🦈 Pixlemeta SHARK V1${lock("shark")}`, `140 credits\nEngine: Enhance pipeline (coming soon)`);
+  lines.push(
+    `🦈 Pixlemeta Shark V1${lock("shark")}\n2K = 15 credits\n4K = 25 credits\n8K = 45 credits\nEngine: Nano Banana Pro Edit + Topaz\n\nUse:\n1) Send an image\n2) /shark <edit instruction>\n`
+  );
 
   await sendMessage(chatId, lines.join("\n"));
 }
@@ -707,14 +826,12 @@ async function cmdGenMenu(chatId) {
   await sendMessage(chatId, "🎨 Choose a PIXELMETA model:", modelsKeyboard(plan));
 }
 
+// ------------------ QUICK GEN ------------------
 async function quickGen(chatId, rawPrompt) {
   await ensureUser(chatId);
 
   const plan = await getPlan(chatId);
-  if (await isBanned(chatId)) {
-    await sendMessage(chatId, "🚫 You are banned.");
-    return;
-  }
+  if (await isBanned(chatId)) return sendMessage(chatId, "🚫 You are banned.");
 
   const inferred = inferModelQualityFromText(rawPrompt, plan);
   const modelKey = inferred.model;
@@ -722,51 +839,125 @@ async function quickGen(chatId, rawPrompt) {
   const cleanedPrompt = inferred.prompt || clampPrompt(rawPrompt);
 
   if (!cleanedPrompt) {
-    await sendMessage(chatId, "Usage: /gen <prompt>\nOr use /gen to open the menu.");
-    return;
+    return sendMessage(chatId, "Usage: /gen <prompt>\nOr use /gen to open the menu.");
   }
 
   if (!canAccess(plan, modelKey)) {
-    await sendMessage(chatId, "🔒 This model is locked for your plan. Use /gen to choose available models.");
-    return;
+    return sendMessage(chatId, "🔒 This model is locked for your plan. Use /gen to choose available models.");
   }
 
   const cost = getCost(modelKey, qualityKey);
-  if (cost === null) {
-    await sendMessage(chatId, "⚠️ Invalid model/quality.");
-    return;
-  }
+  if (cost === null) return sendMessage(chatId, "⚠️ Invalid model/quality.");
 
-  // Credit check (do not deduct yet)
   const credits = await getCredits(chatId);
   if (credits !== Infinity && credits < cost) {
-    await sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
-    return;
+    return sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
   }
 
-  // Busy lock
   if (!(await acquireBusy(chatId))) {
-    await sendMessage(chatId, "⏳ Please wait… your previous generation is still running.");
-    return;
+    return sendMessage(chatId, "⏳ Please wait… your previous generation is still running.");
+  }
+
+  if (!(await acquireGlobalSlot())) {
+    await releaseBusy(chatId);
+    return sendMessage(chatId, "⏳ Server busy. Try again in a moment.");
   }
 
   try {
-    await sendMessage(chatId, `🎨 Generating…\nModel: ${MODELS[modelKey].label}\nQuality: ${qualityKey.toUpperCase()}\n(You will be charged ${cost} credits only if successful)`);
+    await sendMessage(
+      chatId,
+      `🎨 Generating…\nModel: ${MODELS[modelKey].label}\nQuality: ${qualityKey.toUpperCase()}\n(Charge ${cost} credits only if successful)`
+    );
 
     const url = await generateWithModel(modelKey, qualityKey, cleanedPrompt);
 
-    // Deduct only after success
     await deductCredits(chatId, cost);
+    await rIncrBy("m:gen_ok", 1).catch(() => {});
 
     const left = await getCredits(chatId);
     const leftText = left === Infinity ? "Unlimited" : String(left);
 
-    await sendPhoto(chatId, url, `✅ Done\nCredits left: ${leftText}`);
+    // 8K send as document
+    if (qualityKey === "8k") {
+      await sendDocument(chatId, url, `✅ Done (8K)\nCredits left: ${leftText}`);
+    } else {
+      await sendPhoto(chatId, url, `✅ Done\nCredits left: ${leftText}`);
+    }
+
     await rSet(`last:${chatId}`, JSON.stringify({ modelKey, qualityKey }), { ex: 60 * 60 * 24 * 30 });
   } catch (e) {
     console.error("quickGen error:", e?.message || e);
+    await rIncrBy("m:gen_fail", 1).catch(() => {});
     await sendMessage(chatId, "⚠️ Generation failed. Try again.");
   } finally {
+    await releaseGlobalSlot();
+    await releaseBusy(chatId);
+  }
+}
+
+// ------------------ SHARK COMMAND (IMAGE -> IMAGE) ------------------
+async function cmdShark(chatId, editPromptRaw) {
+  await ensureUser(chatId);
+  const plan = await getPlan(chatId);
+
+  if (!canAccess(plan, "shark")) {
+    return sendMessage(chatId, "🔒 SHARK V1 is locked for your plan.");
+  }
+
+  const editPrompt = clampPrompt(editPromptRaw);
+  if (!editPrompt) return sendMessage(chatId, "Usage: /shark <edit instruction>\nFirst send an image.");
+
+  const fileId = await rGet(`lastphoto:${chatId}`);
+  if (!fileId) return sendMessage(chatId, "📸 Send an image first, then use /shark <edit instruction>.");
+
+  // Default shark quality: 4K (you can change)
+  const qualityKey = "4k";
+  const cost = getCost("shark", qualityKey);
+  if (cost === null) return sendMessage(chatId, "⚠️ Shark config error.");
+
+  const credits = await getCredits(chatId);
+  if (credits !== Infinity && credits < cost) {
+    return sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
+  }
+
+  if (!(await acquireBusy(chatId))) {
+    return sendMessage(chatId, "⏳ Please wait… your previous generation is still running.");
+  }
+
+  if (!(await acquireGlobalSlot())) {
+    await releaseBusy(chatId);
+    return sendMessage(chatId, "⏳ Server busy. Try again in a moment.");
+  }
+
+  try {
+    await sendMessage(
+      chatId,
+      `🦈 SHARK V1 editing…\nQuality: ${qualityKey.toUpperCase()}\n(Charge ${cost} credits only if successful)`
+    );
+
+    const imgUrl = await tgGetFileUrl(fileId);
+    const smart = buildPrompt("shark", qualityKey, editPrompt);
+
+    const outUrl = await runEngine("shark_v1_edit", {
+      imageUrl: imgUrl,
+      prompt: smart,
+      qualityKey
+    });
+
+    await deductCredits(chatId, cost);
+    await rIncrBy("m:gen_ok", 1).catch(() => {});
+
+    const left = await getCredits(chatId);
+    const leftText = left === Infinity ? "Unlimited" : String(left);
+
+    // Shark default is 4K -> photo ok (if huge, you can switch to document)
+    await sendPhoto(chatId, outUrl, `✅ SHARK V1 Done\nCredits left: ${leftText}`);
+  } catch (e) {
+    console.error("shark error:", e?.message || e);
+    await rIncrBy("m:gen_fail", 1).catch(() => {});
+    await sendMessage(chatId, "⚠️ SHARK edit failed. Try again.");
+  } finally {
+    await releaseGlobalSlot();
     await releaseBusy(chatId);
   }
 }
@@ -823,16 +1014,15 @@ async function handleAdmin(chatId, text) {
 
   if (cmd === "/setpaid") {
     const userId = args[1];
-    const days = safeInt(args[2], 0); // optional
+    const days = safeInt(args[2], 0);
     if (!userId) return sendMessage(chatId, "Usage: /setpaid <user_id> [days]");
     if (days > 0) {
       const expiresAt = now() + days * 24 * 60 * 60 * 1000;
       await setPlan(userId, "paid", { expiresAt });
       return sendMessage(chatId, `✅ Set PAID for ${userId} (1200 credits). Valid ${days} days`);
-    } else {
-      await setPlan(userId, "paid");
-      return sendMessage(chatId, `✅ Set PAID for ${userId} (1200 credits). Validity not set`);
     }
+    await setPlan(userId, "paid");
+    return sendMessage(chatId, `✅ Set PAID for ${userId} (1200 credits). Validity not set`);
   }
 
   if (cmd === "/ban") {
@@ -849,7 +1039,40 @@ async function handleAdmin(chatId, text) {
     return sendMessage(chatId, `✅ Unbanned ${userId}`);
   }
 
-  // Unknown admin cmd
+  // ✅ Stats
+  if (cmd === "/stats") {
+    const totalUsers = redis ? await redis.scard("users") : 0;
+    const ok = safeInt(await rGet("m:gen_ok"), 0);
+    const fail = safeInt(await rGet("m:gen_fail"), 0);
+    const tg429 = safeInt(await rGet("m:tg_429"), 0);
+    const glob = safeInt(await rGet("glob:gen"), 0);
+
+    return sendMessage(
+      chatId,
+      `📊 PIXELMETA STATS\n\nUsers: ${totalUsers}\nJobs OK: ${ok}\nJobs Fail: ${fail}\nTG 429: ${tg429}\nActive Gen Slots: ${glob}/${GLOBAL_GEN_LIMIT}`
+    );
+  }
+
+  // ✅ Broadcast (safe because tgCall throttles + retries)
+  if (cmd === "/broadcast") {
+    const msgText = text.replace("/broadcast", "").trim();
+    if (!msgText) return sendMessage(chatId, "Usage: /broadcast <message>");
+
+    if (!redis) return sendMessage(chatId, "Redis required for broadcast.");
+
+    const users = await redis.smembers("users");
+    await sendMessage(chatId, `📢 Broadcasting to ${users.length} users...`);
+
+    let sent = 0;
+    for (const uid of users) {
+      await sendMessage(uid, `📢 PIXELMETA NOTICE\n\n${msgText}`).catch(() => {});
+      sent++;
+      if (sent % 25 === 0) await sleep(500); // extra buffer
+    }
+
+    return sendMessage(chatId, `✅ Broadcast done. Sent to ${sent} users.`);
+  }
+
   return sendMessage(chatId, "⚠️ Unknown admin command.");
 }
 
@@ -862,81 +1085,56 @@ async function onCallback(cq) {
   if (!chatId) return;
 
   await ensureUser(chatId);
-  if (await isBanned(chatId)) {
-    await sendMessage(chatId, "🚫 You are banned.");
-    return;
-  }
+  if (await isBanned(chatId)) return sendMessage(chatId, "🚫 You are banned.");
 
   const plan = await getPlan(chatId);
 
-  // Cancel / Back
   if (data === "x:cancel") {
     await clearFlow(chatId);
-    await sendMessage(chatId, "✅ Cancelled.");
-    return;
-  }
-  if (data === "x:back_models") {
-    await setFlow(chatId, { step: "choose_model" });
-    await sendMessage(chatId, "🎨 Choose a PIXELMETA model:", modelsKeyboard(plan));
-    return;
+    return sendMessage(chatId, "✅ Cancelled.");
   }
 
-  // Model choose
+  if (data === "x:back_models") {
+    await setFlow(chatId, { step: "choose_model" });
+    return sendMessage(chatId, "🎨 Choose a PIXELMETA model:", modelsKeyboard(plan));
+  }
+
   if (data.startsWith("m:")) {
     const modelKey = data.slice(2);
 
-    if (!MODELS[modelKey]) {
-      await sendMessage(chatId, "⚠️ Invalid model.");
-      return;
-    }
+    if (!MODELS[modelKey]) return sendMessage(chatId, "⚠️ Invalid model.");
+    if (!canAccess(plan, modelKey)) return sendMessage(chatId, "🔒 Model locked for your plan.");
 
-    if (!canAccess(plan, modelKey)) {
-      await sendMessage(chatId, "🔒 This model is locked for your plan.\nUpgrade required.");
-      return;
-    }
-
-    // EDIT/SHARK flows are future (we keep UI but block safely)
-    if (modelKey === "edit" || modelKey === "shark") {
-      await setFlow(chatId, { step: "blocked_future", modelKey });
-      await sendMessage(chatId, "🚧 This premium feature is coming soon.\n(Engine not connected yet)");
-      return;
+    // Shark uses /shark command (image required), not menu prompt flow
+    if (modelKey === "shark") {
+      await clearFlow(chatId);
+      return sendMessage(chatId, `🦈 SHARK V1 is image-to-image.\n\n1) Send a photo\n2) /shark <edit instruction>`);
     }
 
     await setFlow(chatId, { step: "choose_quality", modelKey });
-    await sendMessage(chatId, `📐 Choose quality for ${MODELS[modelKey].label}:`, qualityKeyboard(modelKey));
-    return;
+    return sendMessage(chatId, `📐 Choose quality for ${MODELS[modelKey].label}:`, qualityKeyboard(modelKey));
   }
 
-  // Quality choose
   if (data.startsWith("q:")) {
-    const parts = data.split(":"); // q:model:quality
+    const parts = data.split(":");
     const modelKey = parts[1];
     const qualityKey = parts[2];
 
-    if (!MODELS[modelKey]?.qualities?.[qualityKey]) {
-      await sendMessage(chatId, "⚠️ Invalid quality.");
-      return;
-    }
+    if (!MODELS[modelKey]?.qualities?.[qualityKey]) return sendMessage(chatId, "⚠️ Invalid quality.");
 
     const cost = getCost(modelKey, qualityKey);
-    if (cost === null) {
-      await sendMessage(chatId, "⚠️ Invalid cost config.");
-      return;
-    }
+    if (cost === null) return sendMessage(chatId, "⚠️ Invalid cost config.");
 
     const credits = await getCredits(chatId);
     if (credits !== Infinity && credits < cost) {
-      await sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
-      return;
+      return sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
     }
 
     await setFlow(chatId, { step: "await_prompt", modelKey, qualityKey, cost });
-
-    await sendMessage(
+    return sendMessage(
       chatId,
       `✍️ Send your prompt now.\n\nExample:\n"subject: lion; lighting: golden hour; camera: 85mm; background: savannah"\n\n(Charge ${cost} credits only if generation succeeds)`
     );
-    return;
   }
 }
 
@@ -945,37 +1143,44 @@ async function onMessage(msg) {
   const chatId = String(msg.chat?.id || "");
   if (!chatId) return;
 
-  // webhook secret protection
-  // handled at express route level (below)
-
-  // Basic rate limit (silent drop)
   const allowed = await rateLimit(chatId);
   if (!allowed) return;
 
   await ensureUser(chatId);
 
   if (await isBanned(chatId)) {
-    // allow admin to message even if banned
-    if (!isAdmin(chatId)) {
-      await sendMessage(chatId, "🚫 You are banned.");
-      return;
+    if (!isAdmin(chatId)) return sendMessage(chatId, "🚫 You are banned.");
+  }
+
+  // Store last photo for SHARK editing
+  if (msg.photo && msg.photo.length) {
+    const best = msg.photo[msg.photo.length - 1];
+    if (best?.file_id) {
+      await rSet(`lastphoto:${chatId}`, best.file_id, { ex: 60 * 60 * 12 });
+      await sendMessage(chatId, "📸 Photo saved. Use /shark <edit instruction> to edit it.");
     }
   }
 
-  // Admin commands
   const text = (msg.text || "").trim();
 
-  if (text.startsWith("/addcredit") || text.startsWith("/settrial") || text.startsWith("/setpromo") ||
-      text.startsWith("/setpaid") || text.startsWith("/ban") || text.startsWith("/unban") ||
-      text.startsWith("/resetcredits")) {
+  // Admin commands
+  if (
+    text.startsWith("/addcredit") ||
+    text.startsWith("/settrial") ||
+    text.startsWith("/setpromo") ||
+    text.startsWith("/setpaid") ||
+    text.startsWith("/ban") ||
+    text.startsWith("/unban") ||
+    text.startsWith("/resetcredits") ||
+    text.startsWith("/stats") ||
+    text.startsWith("/broadcast")
+  ) {
     await handleAdmin(chatId, text);
     return;
   }
 
-  // Standard commands
   if (text === "/start") return cmdStart(chatId);
   if (text === "/credits") return cmdCredits(chatId);
-  if (text === "/planvalidity") return cmdPlanValidity(chatId);
   if (text === "/models") return cmdModels(chatId);
   if (text === "/cancel") {
     await clearFlow(chatId);
@@ -983,16 +1188,19 @@ async function onMessage(msg) {
     return sendMessage(chatId, "✅ Cancelled.");
   }
 
-  // /gen entry
-  if (text === "/gen") {
-    return cmdGenMenu(chatId);
+  // SHARK edit command
+  if (text.startsWith("/shark ")) {
+    return cmdShark(chatId, text.slice(7));
+  }
+  if (text === "/shark") {
+    return sendMessage(chatId, "Usage: /shark <edit instruction>\nFirst send an image.");
   }
 
-  // /gen <prompt> quick mode (smart detection)
-  if (text.startsWith("/gen ")) {
-    const rawPrompt = text.slice(5);
-    return quickGen(chatId, rawPrompt);
-  }
+  // /gen menu
+  if (text === "/gen") return cmdGenMenu(chatId);
+
+  // /gen quick
+  if (text.startsWith("/gen ")) return quickGen(chatId, text.slice(5));
 
   // Flow prompt capture
   const flow = await getFlow(chatId);
@@ -1001,18 +1209,19 @@ async function onMessage(msg) {
     const qualityKey = flow.qualityKey;
     const cost = safeInt(flow.cost, 0);
 
-    // Credit check again (still no deduction yet)
     const credits = await getCredits(chatId);
     if (credits !== Infinity && credits < cost) {
       await clearFlow(chatId);
-      await sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
-      return;
+      return sendMessage(chatId, `❌ Not enough credits.\nNeed: ${cost}\nYour balance: ${credits}`);
     }
 
-    // Busy lock
     if (!(await acquireBusy(chatId))) {
-      await sendMessage(chatId, "⏳ Please wait… your previous generation is still running.");
-      return;
+      return sendMessage(chatId, "⏳ Please wait… your previous generation is still running.");
+    }
+
+    if (!(await acquireGlobalSlot())) {
+      await releaseBusy(chatId);
+      return sendMessage(chatId, "⏳ Server busy. Try again in a moment.");
     }
 
     try {
@@ -1020,28 +1229,33 @@ async function onMessage(msg) {
 
       const url = await generateWithModel(modelKey, qualityKey, text);
 
-      // Deduct only after success
       await deductCredits(chatId, cost);
+      await rIncrBy("m:gen_ok", 1).catch(() => {});
 
       const left = await getCredits(chatId);
       const leftText = left === Infinity ? "Unlimited" : String(left);
 
-      await sendPhoto(chatId, url, `✅ Done\nCredits left: ${leftText}`);
+      if (qualityKey === "8k") {
+        await sendDocument(chatId, url, `✅ Done (8K)\nCredits left: ${leftText}`);
+      } else {
+        await sendPhoto(chatId, url, `✅ Done\nCredits left: ${leftText}`);
+      }
+
       await rSet(`last:${chatId}`, JSON.stringify({ modelKey, qualityKey }), { ex: 60 * 60 * 24 * 30 });
     } catch (e) {
       console.error("flow gen error:", e?.message || e);
+      await rIncrBy("m:gen_fail", 1).catch(() => {});
       await sendMessage(chatId, "⚠️ Generation failed. Try again.");
     } finally {
       await clearFlow(chatId);
+      await releaseGlobalSlot();
       await releaseBusy(chatId);
     }
-
     return;
   }
 
-  // If user types something random, guide them
   if (text && !text.startsWith("/")) {
-    await sendMessage(chatId, `Use /gen to generate an image.\nOr: /gen <prompt>`);
+    return sendMessage(chatId, `Use /gen to generate an image.\nOr: /gen <prompt>\n\nFor photo editing:\n1) Send photo\n2) /shark <edit instruction>`);
   }
 }
 
@@ -1049,12 +1263,9 @@ async function onMessage(msg) {
 app.get("/", (req, res) => res.status(200).send("ok"));
 
 app.post("/", async (req, res) => {
-  // webhook secret protection (optional)
   if (TG_SECRET_TOKEN) {
     const secret = req.headers["x-telegram-bot-api-secret-token"];
-    if (secret !== TG_SECRET_TOKEN) {
-      return res.sendStatus(401);
-    }
+    if (secret !== TG_SECRET_TOKEN) return res.sendStatus(401);
   }
 
   res.sendStatus(200);
@@ -1062,14 +1273,8 @@ app.post("/", async (req, res) => {
   const update = req.body;
 
   try {
-    if (update?.callback_query) {
-      await onCallback(update.callback_query);
-      return;
-    }
-    if (update?.message) {
-      await onMessage(update.message);
-      return;
-    }
+    if (update?.callback_query) return await onCallback(update.callback_query);
+    if (update?.message) return await onMessage(update.message);
   } catch (e) {
     console.error("Update handler error:", e?.message || e);
   }
@@ -1082,4 +1287,6 @@ process.on("uncaughtException", (e) => console.error("uncaughtException:", e));
 // Start server
 app.listen(PORT, () => {
   console.log("🚀 PIXELMETA ENGINE LIVE on port", PORT);
+  console.log("✅ FAL_FLUX_PRO_MODEL =", FAL_FLUX_PRO_MODEL);
+  console.log("✅ GLOBAL_GEN_LIMIT =", GLOBAL_GEN_LIMIT);
 });
