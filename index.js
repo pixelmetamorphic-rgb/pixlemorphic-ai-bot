@@ -7,7 +7,6 @@ const fetch = require("node-fetch");
 const Redis = require("ioredis");
 
 const app = express();
-
 app.use(express.json({ limit: "4mb" }));
 app.disable("x-powered-by");
 
@@ -16,27 +15,16 @@ app.disable("x-powered-by");
 ========================= */
 
 const TG_TOKEN = process.env.TG_TOKEN;
-const REPLICATE_API_TOKEN =
-  process.env.REPLICATE_API_TOKEN;
-
-const FAL_API_KEY =
-  process.env.FAL_API_KEY ||
-  process.env.FAL_KEY;
-
-const REDIS_URL =
-  process.env.REDIS_URL;
-
-const TG_SECRET_TOKEN =
-  process.env.TG_SECRET_TOKEN || "";
-
-const PORT =
-  parseInt(process.env.PORT || "8080", 10);
+const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
+const FAL_API_KEY = process.env.FAL_API_KEY || process.env.FAL_KEY;
+const REDIS_URL = process.env.REDIS_URL;
+const TG_SECRET_TOKEN = process.env.TG_SECRET_TOKEN || "";
+const PORT = parseInt(process.env.PORT || "8080", 10);
 
 const ADMIN_ID = "1078816855";
 
 const FAL_FLUX_PRO_MODEL =
-  process.env.FAL_FLUX_PRO_MODEL ||
-  "fal-ai/flux-pro/v1.1-ultra";
+  process.env.FAL_FLUX_PRO_MODEL || "fal-ai/flux-pro/v1.1-ultra";
 
 const REPLICATE_SDXL_VERSION =
   "39ed52f2a78e934b3ba6f1f50c7b07c7a1c77d9b29b19a70c2b6c38b1f86c7c5";
@@ -44,17 +32,15 @@ const REPLICATE_SDXL_VERSION =
 const MAX_PROMPT_LEN = 900;
 const BUSY_LOCK_SECONDS = 180;
 
-const GLOBAL_GEN_LIMIT =
-  parseInt(
-    process.env.GLOBAL_GEN_LIMIT || "3",
-    10
-  );
+const GLOBAL_GEN_LIMIT = parseInt(
+  process.env.GLOBAL_GEN_LIMIT || "3",
+  10
+);
 
-const TG_MIN_GAP_MS =
-  parseInt(
-    process.env.TG_MIN_GAP_MS || "70",
-    10
-  );
+const TG_MIN_GAP_MS = parseInt(
+  process.env.TG_MIN_GAP_MS || "70",
+  10
+);
 
 /* =========================
    REDIS
@@ -69,16 +55,15 @@ if (REDIS_URL) {
     console.log("Redis connected");
   });
 
-  redis.on("error", err => {
-    console.error(
-      "Redis error:",
-      err.message
-    );
+  redis.on("ready", () => {
+    console.log("Redis ready");
+  });
+
+  redis.on("error", (err) => {
+    console.error("Redis error:", err.message);
   });
 } else {
-  console.warn(
-    "REDIS_URL missing"
-  );
+  console.warn("REDIS_URL missing");
 }
 
 /* =========================
@@ -97,17 +82,14 @@ const PLAN_DEFAULT_CREDITS = {
 ========================= */
 
 const MODELS = {
-
   cinematic: {
     key: "cinematic",
     label: "🎬 Pixlemeta Cinematic",
     type: "t2i",
-
     qualities: {
       "2k": { cost: 2 },
       "4k": { cost: 4 }
     },
-
     engines: {
       primary: "fal_schnell",
       backup: null
@@ -118,12 +100,10 @@ const MODELS = {
     key: "realism",
     label: "📸 Pixlemeta Realism (DSLR)",
     type: "t2i",
-
     qualities: {
       "2k": { cost: 6 },
       "4k": { cost: 15 }
     },
-
     engines: {
       primary: "fal_flux_ultra_realism",
       backup: "replicate_sdxl"
@@ -134,11 +114,9 @@ const MODELS = {
     key: "ultra8k",
     label: "🟪 Pixlemeta Ultra 8K (True)",
     type: "t2i",
-
     qualities: {
       "8k": { cost: 30 }
     },
-
     engines: {
       primary: "fal_flux_pro_8k",
       backup: null
@@ -149,13 +127,11 @@ const MODELS = {
     key: "shark",
     label: "🦈 Pixlemeta SHARK V1 (Premium Edit)",
     type: "i2i",
-
     qualities: {
       "2k": { cost: 15 },
       "4k": { cost: 25 },
       "8k": { cost: 45 }
     },
-
     engines: {
       primary: "shark_v1_edit",
       backup: null
@@ -164,22 +140,10 @@ const MODELS = {
 };
 
 const PLAN_ACCESS = {
-  trial: new Set([
-    "cinematic",
-    "realism"
-  ]),
-
-  promo: new Set(
-    Object.keys(MODELS)
-  ),
-
-  paid: new Set(
-    Object.keys(MODELS)
-  ),
-
-  admin: new Set(
-    Object.keys(MODELS)
-  )
+  trial: new Set(["cinematic", "realism"]),
+  promo: new Set(Object.keys(MODELS)),
+  paid: new Set(Object.keys(MODELS)),
+  admin: new Set(Object.keys(MODELS))
 };
 
 /* =========================
@@ -187,7 +151,6 @@ const PLAN_ACCESS = {
 ========================= */
 
 const RATIOS = {
-
   sq: {
     id: "sq",
     label: "1:1",
@@ -239,32 +202,16 @@ const RATIOS = {
 ========================= */
 
 function sleep(ms) {
-  return new Promise(
-    resolve => setTimeout(resolve, ms)
-  );
+  return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function now() {
-  return Math.floor(
-    Date.now() / 1000
-  );
-}
-
-function safeInt(
-  value,
-  fallback = 0
-) {
+function safeInt(value, fallback = 0) {
   const n = parseInt(value, 10);
-
-  return Number.isFinite(n)
-    ? n
-    : fallback;
+  return Number.isFinite(n) ? n : fallback;
 }
 
-function clampPrompt(text) {
-  return String(text || "")
-    .trim()
-    .slice(0, MAX_PROMPT_LEN);
+function clampPrompt(text, maxLen = MAX_PROMPT_LEN) {
+  return String(text || "").trim().slice(0, maxLen);
 }
 
 function isAdmin(userId) {
@@ -272,10 +219,41 @@ function isAdmin(userId) {
 }
 
 function getRatio(ratioKey) {
-  return (
-    RATIOS[ratioKey] ||
-    RATIOS.sq
+  return RATIOS[ratioKey] || RATIOS.sq;
+}
+
+function ratioLabel(ratioKey) {
+  return getRatio(ratioKey).label;
+}
+
+function isValidModel(modelKey) {
+  return Boolean(MODELS[modelKey]);
+}
+
+function isValidQuality(modelKey, qualityKey) {
+  return Boolean(
+    MODELS[modelKey] &&
+    MODELS[modelKey].qualities[qualityKey]
   );
+}
+
+function modelLabel(modelKey) {
+  return MODELS[modelKey] ? MODELS[modelKey].label : modelKey;
+}
+
+function qualityLabel(modelKey, qualityKey) {
+  if (modelKey === "ultra8k") return "8K";
+  return String(qualityKey).toUpperCase();
+}
+
+function getCost(modelKey, qualityKey) {
+  const model = MODELS[modelKey];
+  if (!model) return null;
+
+  const quality = model.qualities[qualityKey];
+  if (!quality) return null;
+
+  return quality.cost;
 }
 
 /* =========================
@@ -285,44 +263,26 @@ function getRatio(ratioKey) {
 let tgLastCall = 0;
 
 async function tgThrottle() {
+  const elapsed = Date.now() - tgLastCall;
 
-  const elapsed =
-    Date.now() - tgLastCall;
-
-  if (
-    elapsed < TG_MIN_GAP_MS
-  ) {
-    await sleep(
-      TG_MIN_GAP_MS - elapsed
-    );
+  if (elapsed < TG_MIN_GAP_MS) {
+    await sleep(TG_MIN_GAP_MS - elapsed);
   }
 
   tgLastCall = Date.now();
 }
 
 function extractRetryAfterSec(error) {
-
-  const match = String(
-    error?.message || ""
-  ).match(
+  const match = String(error?.message || "").match(
     /retry after\s+(\d+)/i
   );
 
-  return match
-    ? safeInt(match[1], 1)
-    : 1;
+  return match ? safeInt(match[1], 1) : 1;
 }
 
-async function tgCall(
-  method,
-  body,
-  retry = 0
-) {
-
+async function tgCall(method, body, retry = 0) {
   if (!TG_TOKEN) {
-    throw new Error(
-      "TG_TOKEN missing"
-    );
+    throw new Error("TG_TOKEN missing");
   }
 
   await tgThrottle();
@@ -331,24 +291,16 @@ async function tgCall(
     `https://api.telegram.org/bot${TG_TOKEN}/${method}`,
     {
       method: "POST",
-
       headers: {
-        "Content-Type":
-          "application/json"
+        "Content-Type": "application/json"
       },
-
       body: JSON.stringify(body)
     }
   );
 
-  const data =
-    await response.json();
+  const data = await response.json();
 
-  if (
-    !response.ok ||
-    !data.ok
-  ) {
-
+  if (!response.ok || !data.ok) {
     const error = new Error(
       data?.description ||
       `Telegram API error ${response.status}`
@@ -356,25 +308,12 @@ async function tgCall(
 
     error.response = data;
 
-    if (
-      response.status === 429 &&
-      retry < 3
-    ) {
+    if (response.status === 429 && retry < 3) {
+      const wait = extractRetryAfterSec(error);
 
-      const wait =
-        extractRetryAfterSec(
-          error
-        );
+      await sleep((wait + 1) * 1000);
 
-      await sleep(
-        (wait + 1) * 1000
-      );
-
-      return tgCall(
-        method,
-        body,
-        retry + 1
-      );
+      return tgCall(method, body, retry + 1);
     }
 
     throw error;
@@ -383,80 +322,47 @@ async function tgCall(
   return data.result;
 }
 
-async function sendMessage(
-  chatId,
-  text,
-  extra = {}
-) {
-  return tgCall(
-    "sendMessage",
-    {
-      chat_id: chatId,
-      text,
-      ...extra
-    }
-  );
+async function sendMessage(chatId, text, extra = {}) {
+  return tgCall("sendMessage", {
+    chat_id: chatId,
+    text,
+    ...extra
+  });
 }
 
-async function sendPhoto(
-  chatId,
-  photo,
-  caption = ""
-) {
-  return tgCall(
-    "sendPhoto",
-    {
-      chat_id: chatId,
-      photo,
-      caption
-    }
-  );
+async function sendPhoto(chatId, photo, caption = "") {
+  return tgCall("sendPhoto", {
+    chat_id: chatId,
+    photo,
+    caption
+  });
 }
 
-async function sendDocument(
-  chatId,
-  document,
-  caption = ""
-) {
-  return tgCall(
-    "sendDocument",
-    {
-      chat_id: chatId,
-      document,
-      caption
-    }
-  );
+async function sendDocument(chatId, document, caption = "") {
+  return tgCall("sendDocument", {
+    chat_id: chatId,
+    document,
+    caption
+  });
 }
 
-async function answerCallbackQuery(
-  callbackQueryId,
-  text = ""
-) {
-  return tgCall(
-    "answerCallbackQuery",
-    {
-      callback_query_id:
-        callbackQueryId,
-      text
-    }
-  );
+async function answerCallbackQuery(callbackQueryId, text = "") {
+  return tgCall("answerCallbackQuery", {
+    callback_query_id: callbackQueryId,
+    text
+  });
 }
 
-async function tgGetFileUrl(
-  fileId
-) {
+async function tgGetFileUrl(fileId) {
+  const file = await tgCall("getFile", {
+    file_id: fileId
+  });
 
-  const file = await tgCall(
-    "getFile",
-    {
-      file_id: fileId
-    }
-  );
+  if (!file?.file_path) {
+    throw new Error("Telegram file path missing");
+  }
 
-  return (
-    `https://api.telegram.org/file/bot` +
-    `${TG_TOKEN}/${file.file_path}`
-  );
+  return `https://api.telegram.org/file/bot${TG_TOKEN}/${file.file_path}`;
 }
 
 /* =========================
@@ -464,106 +370,62 @@ async function tgGetFileUrl(
 ========================= */
 
 async function rGet(key) {
-
   if (!redis) return null;
 
   try {
     return await redis.get(key);
   } catch (error) {
-    console.error(
-      "Redis GET:",
-      error.message
-    );
+    console.error("Redis GET:", error.message);
     return null;
   }
 }
 
-async function rSet(
-  key,
-  value,
-  ttl = null
-) {
-
+async function rSet(key, value, ttl = null) {
   if (!redis) return false;
 
   try {
-
     if (ttl) {
-      await redis.set(
-        key,
-        String(value),
-        "EX",
-        ttl
-      );
+      await redis.set(key, String(value), "EX", ttl);
     } else {
-      await redis.set(
-        key,
-        String(value)
-      );
+      await redis.set(key, String(value));
     }
 
     return true;
-
   } catch (error) {
-
-    console.error(
-      "Redis SET:",
-      error.message
-    );
-
+    console.error("Redis SET:", error.message);
     return false;
   }
 }
 
 async function rDel(key) {
-
   if (!redis) return false;
 
   try {
     await redis.del(key);
     return true;
   } catch (error) {
-    console.error(
-      "Redis DEL:",
-      error.message
-    );
+    console.error("Redis DEL:", error.message);
     return false;
   }
 }
 
-async function rIncrBy(
-  key,
-  amount
-) {
-
-  if (!redis) return null;
-
-  try {
-    return await redis.incrby(
-      key,
-      amount
-    );
-  } catch (error) {
-    console.error(
-      "Redis INCRBY:",
-      error.message
-    );
-    return null;
-  }
-}
-
 async function ensureUser(userId) {
-  const key = `u:${userId}:plan`;
+  if (!redis) {
+    throw new Error("Redis is not configured");
+  }
 
-  let plan = await rGet(key);
+  const planKey = `u:${userId}:plan`;
+  const creditsKey = `u:${userId}:credits`;
+
+  let plan = await rGet(planKey);
 
   if (!plan) {
     plan = isAdmin(userId) ? "admin" : "trial";
-    await rSet(key, plan);
+    await rSet(planKey, plan);
 
     if (!isAdmin(userId)) {
       await rSet(
-        `u:${userId}:credits`,
+        creditsKey,
         PLAN_DEFAULT_CREDITS[plan]
       );
     }
@@ -581,7 +443,12 @@ async function getPlan(userId) {
 }
 
 async function setPlan(userId, plan) {
-  if (!PLAN_DEFAULT_CREDITS[plan]) return false;
+  if (!Object.prototype.hasOwnProperty.call(
+    PLAN_DEFAULT_CREDITS,
+    plan
+  )) {
+    return false;
+  }
 
   await rSet(`u:${userId}:plan`, plan);
 
@@ -617,12 +484,10 @@ async function addCredits(userId, amount) {
 
   const current = await getCredits(userId);
 
-  await rSet(
+  return rSet(
     `u:${userId}:credits`,
     current + amount
   );
-
-  return true;
 }
 
 async function deductCredits(userId, amount) {
@@ -636,12 +501,10 @@ async function deductCredits(userId, amount) {
 
   if (current < amount) return false;
 
-  await rSet(
+  return rSet(
     `u:${userId}:credits`,
     current - amount
   );
-
-  return true;
 }
 
 async function isBanned(userId) {
@@ -659,9 +522,7 @@ async function setBan(userId, value) {
 async function rateLimit(userId) {
   const key = `rate:${userId}`;
 
-  if (await rGet(key)) {
-    return false;
-  }
+  if (await rGet(key)) return false;
 
   await rSet(key, "1", 1);
 
@@ -671,9 +532,7 @@ async function rateLimit(userId) {
 async function acquireBusy(userId) {
   const key = `busy:${userId}`;
 
-  if (await rGet(key)) {
-    return false;
-  }
+  if (await rGet(key)) return false;
 
   await rSet(
     key,
@@ -762,33 +621,22 @@ async function releaseGlobalSlot() {
   }
 }
 
-function getCost(modelKey, qualityKey) {
-  const model = MODELS[modelKey];
-
-  if (!model) return null;
-
-  const quality =
-    model.qualities[qualityKey];
-
-  if (!quality) return null;
-
-  return quality.cost;
-}
-
 async function canAccess(userId, modelKey) {
   const plan = await getPlan(userId);
 
-  const allowed =
-    PLAN_ACCESS[plan];
+  const allowed = PLAN_ACCESS[plan];
 
   if (!allowed) return false;
 
   return allowed.has(modelKey);
 }
 
+/* =========================
+   PROMPT / MODEL INFERENCE
+========================= */
+
 function inferModelQualityFromText(text) {
-  const lower = String(text || "")
-    .toLowerCase();
+  const lower = String(text || "").toLowerCase();
 
   let modelKey = "cinematic";
   let qualityKey = "2k";
@@ -830,9 +678,7 @@ function inferRatioFromText(text) {
     /\b(1:1|4:5|3:4|16:9|9:16)\b/
   );
 
-  if (!match) {
-    return "sq";
-  }
+  if (!match) return "sq";
 
   const value = match[1];
 
@@ -877,12 +723,9 @@ function parseStructuredPrompt(text) {
 }
 
 function buildPrompt(text) {
-  const parsed =
-    parseStructuredPrompt(text);
+  const parsed = parseStructuredPrompt(text);
 
-  let prompt = clampPrompt(
-    parsed.prompt
-  );
+  let prompt = clampPrompt(parsed.prompt);
 
   if (parsed.negative) {
     prompt +=
@@ -893,66 +736,13 @@ function buildPrompt(text) {
   return prompt;
 }
 
-function getRatio(ratioKey) {
-  return RATIOS[ratioKey] ||
-    RATIOS.sq;
-}
+/* =========================
+   FAL / REPLICATE
+========================= */
 
-function ratioLabel(ratioKey) {
-  return getRatio(ratioKey).label;
-}
-
-function isValidModel(modelKey) {
-  return Boolean(
-    MODELS[modelKey]
-  );
-}
-
-function isValidQuality(
-  modelKey,
-  qualityKey
-) {
-  return Boolean(
-    MODELS[modelKey] &&
-    MODELS[modelKey]
-      .qualities[qualityKey]
-  );
-}
-
-function modelLabel(modelKey) {
-  return MODELS[modelKey]
-    ? MODELS[modelKey].label
-    : modelKey;
-}
-
-function qualityLabel(
-  modelKey,
-  qualityKey
-) {
-  const model =
-    MODELS[modelKey];
-
-  if (!model) return qualityKey;
-
-  if (
-    modelKey === "ultra8k"
-  ) {
-    return "8K";
-  }
-
-  return String(
-    qualityKey
-  ).toUpperCase();
-}
-
-async function falRun(
-  endpoint,
-  input
-) {
+async function falRun(endpoint, input) {
   if (!FAL_API_KEY) {
-    throw new Error(
-      "FAL_API_KEY is missing"
-    );
+    throw new Error("FAL_API_KEY is missing");
   }
 
   const response = await fetch(
@@ -960,17 +750,14 @@ async function falRun(
     {
       method: "POST",
       headers: {
-        Authorization:
-          `Key ${FAL_API_KEY}`,
-        "Content-Type":
-          "application/json"
+        Authorization: `Key ${FAL_API_KEY}`,
+        "Content-Type": "application/json"
       },
       body: JSON.stringify(input)
     }
   );
 
-  const text =
-    await response.text();
+  const text = await response.text();
 
   let data;
 
@@ -1010,14 +797,14 @@ function pickFirstImageUrl(data) {
     data.image &&
     typeof data.image === "object"
   ) {
-    return data.image.url ||
+    return (
+      data.image.url ||
       data.image.uri ||
-      null;
+      null
+    );
   }
 
-  if (
-    typeof data.image === "string"
-  ) {
+  if (typeof data.image === "string") {
     return data.image;
   }
 
@@ -1026,18 +813,13 @@ function pickFirstImageUrl(data) {
     Array.isArray(data.output) &&
     data.output[0]
   ) {
-    const item =
-      data.output[0];
+    const item = data.output[0];
 
-    if (
-      typeof item === "string"
-    ) {
+    if (typeof item === "string") {
       return item;
     }
 
-    return item.url ||
-      item.uri ||
-      null;
+    return item.url || item.uri || null;
   }
 
   return null;
@@ -1048,8 +830,7 @@ async function falSchnellGenerate(
   qualityKey,
   ratioKey
 ) {
-  const ratio =
-    getRatio(ratioKey);
+  const ratio = getRatio(ratioKey);
 
   const input = {
     prompt,
@@ -1065,8 +846,7 @@ async function falSchnellGenerate(
     input
   );
 
-  const url =
-    pickFirstImageUrl(data);
+  const url = pickFirstImageUrl(data);
 
   if (!url) {
     throw new Error(
@@ -1086,13 +866,11 @@ async function falFluxUltraRealism(
   qualityKey,
   ratioKey
 ) {
-  const ratio =
-    getRatio(ratioKey);
+  const ratio = getRatio(ratioKey);
 
   const input = {
     prompt,
-    aspect_ratio:
-      ratio.ultraAspect,
+    aspect_ratio: ratio.ultraAspect,
     num_images: 1,
     raw: true
   };
@@ -1102,8 +880,7 @@ async function falFluxUltraRealism(
     input
   );
 
-  const url =
-    pickFirstImageUrl(data);
+  const url = pickFirstImageUrl(data);
 
   if (!url) {
     throw new Error(
@@ -1115,8 +892,7 @@ async function falFluxUltraRealism(
     url,
     type: "image",
     ratio: ratio.label,
-    approximate:
-      ratioKey === "45"
+    approximate: ratioKey === "45"
   };
 }
 
@@ -1125,13 +901,11 @@ async function falFluxProGenerate8K(
   qualityKey,
   ratioKey
 ) {
-  const ratio =
-    getRatio(ratioKey);
+  const ratio = getRatio(ratioKey);
 
   const input = {
     prompt,
-    aspect_ratio:
-      ratio.ultraAspect,
+    aspect_ratio: ratio.ultraAspect,
     num_images: 1,
     raw: true
   };
@@ -1141,8 +915,7 @@ async function falFluxProGenerate8K(
     input
   );
 
-  const baseUrl =
-    pickFirstImageUrl(data);
+  const baseUrl = pickFirstImageUrl(data);
 
   if (!baseUrl) {
     throw new Error(
@@ -1154,8 +927,7 @@ async function falFluxProGenerate8K(
     url: baseUrl,
     type: "image",
     ratio: ratio.label,
-    approximate:
-      ratioKey === "45"
+    approximate: ratioKey === "45"
   };
 }
 
@@ -1185,35 +957,32 @@ async function falTopazUpscale(
   return url;
 }
 
-async function replicateSDXLGenerate(
-  prompt
-) {
+async function replicateSDXLGenerate(prompt) {
   if (!REPLICATE_API_TOKEN) {
     throw new Error(
       "REPLICATE_API_TOKEN is missing"
     );
   }
 
-  const createResponse =
-    await fetch(
-      "https://api.replicate.com/v1/predictions",
-      {
-        method: "POST",
-        headers: {
-          Authorization:
-            `Bearer ${REPLICATE_API_TOKEN}`,
-          "Content-Type":
-            "application/json"
-        },
-        body: JSON.stringify({
-          version:
-            REPLICATE_SDXL_VERSION,
-          input: {
-            prompt
-          }
-        })
-      }
-    );
+  const createResponse = await fetch(
+    "https://api.replicate.com/v1/predictions",
+    {
+      method: "POST",
+      headers: {
+        Authorization:
+          `Bearer ${REPLICATE_API_TOKEN}`,
+        "Content-Type":
+          "application/json"
+      },
+      body: JSON.stringify({
+        version:
+          REPLICATE_SDXL_VERSION,
+        input: {
+          prompt
+        }
+      })
+    }
+  );
 
   const createText =
     await createResponse.text();
@@ -1221,8 +990,7 @@ async function replicateSDXLGenerate(
   let prediction;
 
   try {
-    prediction =
-      JSON.parse(createText);
+    prediction = JSON.parse(createText);
   } catch {
     throw new Error(
       "Invalid Replicate response"
@@ -1260,16 +1028,13 @@ async function replicateSDXLGenerate(
       await response.json();
 
     if (data.status === "succeeded") {
-      const output =
-        data.output;
+      const output = data.output;
 
       if (Array.isArray(output)) {
         return output[0];
       }
 
-      if (
-        typeof output === "string"
-      ) {
+      if (typeof output === "string") {
         return output;
       }
 
@@ -1299,8 +1064,7 @@ async function sharkV1EditPipeline(
   instruction,
   qualityKey
 ) {
-  const prompt =
-    clampPrompt(instruction);
+  const prompt = clampPrompt(instruction);
 
   if (!prompt) {
     throw new Error(
@@ -1318,8 +1082,7 @@ async function sharkV1EditPipeline(
     }
   );
 
-  let url =
-    pickFirstImageUrl(data);
+  let url = pickFirstImageUrl(data);
 
   if (!url) {
     throw new Error(
@@ -1348,7 +1111,6 @@ async function runEngine(
   extra = {}
 ) {
   switch (engine) {
-
     case "fal_schnell":
       return falSchnellGenerate(
         prompt,
@@ -1405,30 +1167,21 @@ async function generateWithModel(
   ratioKey = "sq",
   extra = {}
 ) {
-  const model =
-    MODELS[modelKey];
+  const model = MODELS[modelKey];
 
   if (!model) {
-    throw new Error(
-      "Invalid model"
-    );
+    throw new Error("Invalid model");
   }
 
-  if (
-    !model.qualities[qualityKey]
-  ) {
-    throw new Error(
-      "Invalid quality"
-    );
+  if (!model.qualities[qualityKey]) {
+    throw new Error("Invalid quality");
   }
 
   const finalPrompt =
     buildPrompt(prompt);
 
   if (!finalPrompt) {
-    throw new Error(
-      "Prompt is empty"
-    );
+    throw new Error("Prompt is empty");
   }
 
   const primary =
@@ -1443,7 +1196,6 @@ async function generateWithModel(
       extra
     );
   } catch (primaryError) {
-
     console.error(
       "Primary engine failed:",
       primaryError.message
@@ -1470,16 +1222,32 @@ async function generateWithModel(
   }
 }
 
+/* =========================
+   KEYBOARDS
+========================= */
+
 function homeKeyboard() {
   return {
     inline_keyboard: [
       [
-        { text: "🖼️ IMAGE", callback_data: "mode:image" },
-        { text: "🎬 VIDEO", callback_data: "mode:video" }
+        {
+          text: "🖼️ IMAGE",
+          callback_data: "mode:image"
+        },
+        {
+          text: "🎬 VIDEO",
+          callback_data: "mode:video"
+        }
       ],
       [
-        { text: "💳 Credits", callback_data: "home:credits" },
-        { text: "📚 Models", callback_data: "home:models" }
+        {
+          text: "💳 Credits",
+          callback_data: "home:credits"
+        },
+        {
+          text: "📚 Models",
+          callback_data: "home:models"
+        }
       ]
     ]
   };
@@ -1488,13 +1256,39 @@ function homeKeyboard() {
 function imageKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "🎬 Pixlemeta Cinematic", callback_data: "m:cinematic" }],
-      [{ text: "📸 Pixlemeta Realism", callback_data: "m:realism" }],
-      [{ text: "🟪 Pixlemeta Ultra 8K", callback_data: "m:ultra8k" }],
-      [{ text: "🦈 Pixlemeta SHARK V1", callback_data: "m:shark" }],
       [
-        { text: "⬅️ Back", callback_data: "x:home" },
-        { text: "❌ Cancel", callback_data: "x:cancel" }
+        {
+          text: "🎬 Pixlemeta Cinematic",
+          callback_data: "m:cinematic"
+        }
+      ],
+      [
+        {
+          text: "📸 Pixlemeta Realism",
+          callback_data: "m:realism"
+        }
+      ],
+      [
+        {
+          text: "🟪 Pixlemeta Ultra 8K",
+          callback_data: "m:ultra8k"
+        }
+      ],
+      [
+        {
+          text: "🦈 Pixlemeta SHARK V1",
+          callback_data: "m:shark"
+        }
+      ],
+      [
+        {
+          text: "⬅️ Back",
+          callback_data: "x:home"
+        },
+        {
+          text: "❌ Cancel",
+          callback_data: "x:cancel"
+        }
       ]
     ]
   };
@@ -1503,19 +1297,29 @@ function imageKeyboard() {
 function qualityKeyboard(modelKey) {
   const model = MODELS[modelKey];
 
-  const buttons = Object.keys(model.qualities).map(q => ({
-    text:
-      `${q.toUpperCase()} • ${model.qualities[q].cost} credits`,
-    callback_data:
-      `q:${modelKey}:${q}`
-  }));
+  const buttons =
+    Object.keys(model.qualities).map(
+      (q) => ({
+        text:
+          `${q.toUpperCase()} • ` +
+          `${model.qualities[q].cost} credits`,
+        callback_data:
+          `q:${modelKey}:${q}`
+      })
+    );
 
   return {
     inline_keyboard: [
       buttons,
       [
-        { text: "⬅️ Back", callback_data: "x:back_models" },
-        { text: "❌ Cancel", callback_data: "x:cancel" }
+        {
+          text: "⬅️ Back",
+          callback_data: "x:back_models"
+        },
+        {
+          text: "❌ Cancel",
+          callback_data: "x:cancel"
+        }
       ]
     ]
   };
@@ -1528,19 +1332,45 @@ function ratioKeyboard(
   return {
     inline_keyboard: [
       [
-        { text: "1:1", callback_data: `r:${modelKey}:${qualityKey}:sq` },
-        { text: "4:5", callback_data: `r:${modelKey}:${qualityKey}:45` }
+        {
+          text: "1:1",
+          callback_data:
+            `r:${modelKey}:${qualityKey}:sq`
+        },
+        {
+          text: "4:5",
+          callback_data:
+            `r:${modelKey}:${qualityKey}:45`
+        }
       ],
       [
-        { text: "3:4", callback_data: `r:${modelKey}:${qualityKey}:34` },
-        { text: "16:9", callback_data: `r:${modelKey}:${qualityKey}:169` }
+        {
+          text: "3:4",
+          callback_data:
+            `r:${modelKey}:${qualityKey}:34`
+        },
+        {
+          text: "16:9",
+          callback_data:
+            `r:${modelKey}:${qualityKey}:169`
+        }
       ],
       [
-        { text: "9:16", callback_data: `r:${modelKey}:${qualityKey}:916` }
+        {
+          text: "9:16",
+          callback_data:
+            `r:${modelKey}:${qualityKey}:916`
+        }
       ],
       [
-        { text: "⬅️ Back", callback_data: "x:back_quality" },
-        { text: "❌ Cancel", callback_data: "x:cancel" }
+        {
+          text: "⬅️ Back",
+          callback_data: "x:back_quality"
+        },
+        {
+          text: "❌ Cancel",
+          callback_data: "x:cancel"
+        }
       ]
     ]
   };
@@ -1549,15 +1379,21 @@ function ratioKeyboard(
 function videoKeyboard() {
   return {
     inline_keyboard: [
-      [{ text: "⬅️ Back", callback_data: "x:home" }]
+      [
+        {
+          text: "⬅️ Back",
+          callback_data: "x:home"
+        }
+      ]
     ]
   };
 }
 
-async function setFlow(
-  userId,
-  data
-) {
+/* =========================
+   FLOW
+========================= */
+
+async function setFlow(userId, data) {
   await rSet(
     `flow:${userId}`,
     JSON.stringify(data),
@@ -1582,7 +1418,10 @@ async function clearFlow(userId) {
   await rDel(`flow:${userId}`);
 }
 
-async function showHome(chatId, userId) {
+async function showHome(
+  chatId,
+  userId
+) {
   const plan =
     await getPlan(userId);
 
@@ -1596,7 +1435,9 @@ async function showHome(chatId, userId) {
     `💳 Plan: ${plan.toUpperCase()}\n` +
     `⚡ Credits: ${credits}\n\n` +
     `Choose what you want to create:`,
-    homeKeyboard()
+    {
+      reply_markup: homeKeyboard()
+    }
   );
 }
 
@@ -1606,14 +1447,18 @@ async function showImageMenu(
 ) {
   await setFlow(
     userId,
-    { step: "choose_model" }
+    {
+      step: "choose_model"
+    }
   );
 
   return sendMessage(
     chatId,
     `🖼️ IMAGE GENERATION\n\n` +
     `Choose your engine:`,
-    imageKeyboard()
+    {
+      reply_markup: imageKeyboard()
+    }
   );
 }
 
@@ -1634,7 +1479,9 @@ async function showVideoMenu(
     `✨ Veo\n` +
     `🎞️ More cinematic models\n\n` +
     `🚧 Currently in development`,
-    videoKeyboard()
+    {
+      reply_markup: videoKeyboard()
+    }
   );
 }
 
@@ -1696,6 +1543,10 @@ async function cmdModels(
     }
   );
 }
+
+/* =========================
+   GENERATION
+========================= */
 
 async function performGeneration(
   chatId,
@@ -1841,23 +1692,26 @@ async function performGeneration(
         caption
       );
     }
-
   } catch (error) {
-
     console.error(
       "Generation error:",
       error
     );
 
-    await sendMessage(
-      chatId,
-      `❌ Generation failed.\n\n` +
-      `${error.message || "Unknown error"}\n\n` +
-      `Your credits were not charged for this failed generation.`
-    );
-
+    try {
+      await sendMessage(
+        chatId,
+        `❌ Generation failed.\n\n` +
+        `${error.message || "Unknown error"}\n\n` +
+        `Your credits were not charged for this failed generation.`
+      );
+    } catch (telegramError) {
+      console.error(
+        "Failed to send generation error:",
+        telegramError.message
+      );
+    }
   } finally {
-
     if (globalSlot) {
       await releaseGlobalSlot();
     }
@@ -1914,7 +1768,7 @@ async function quickGen(
       )[0];
   }
 
-  await performGeneration(
+  return performGeneration(
     chatId,
     userId,
     modelKey,
@@ -1959,16 +1813,22 @@ async function cmdShark(
     return;
   }
 
-  await performGeneration(
+  return performGeneration(
     chatId,
     userId,
     "shark",
     "4k",
     "sq",
     instruction,
-    { imageUrl }
+    {
+      imageUrl
+    }
   );
 }
+
+/* =========================
+   CALLBACKS
+========================= */
 
 async function onCallback(query) {
   const userId =
@@ -1986,7 +1846,12 @@ async function onCallback(query) {
     await answerCallbackQuery(
       query.id
     );
-  } catch {}
+  } catch (error) {
+    console.error(
+      "Callback answer error:",
+      error.message
+    );
+  }
 
   if (data === "x:cancel") {
     await clearFlow(userId);
@@ -2062,9 +1927,12 @@ async function onCallback(query) {
         chatId,
         `⚙️ CHOOSE QUALITY\n\n` +
         `${modelLabel(flow.modelKey)}`,
-        qualityKeyboard(
-          flow.modelKey
-        )
+        {
+          reply_markup:
+            qualityKeyboard(
+              flow.modelKey
+            )
+        }
       );
     }
 
@@ -2108,11 +1976,13 @@ async function onCallback(query) {
               [
                 {
                   text: "⬅️ Back",
-                  callback_data: "x:back_models"
+                  callback_data:
+                    "x:back_models"
                 },
                 {
                   text: "❌ Cancel",
-                  callback_data: "x:cancel"
+                  callback_data:
+                    "x:cancel"
                 }
               ]
             ]
@@ -2133,7 +2003,12 @@ async function onCallback(query) {
       chatId,
       `⚙️ CHOOSE QUALITY\n\n` +
       `${modelLabel(modelKey)}`,
-      qualityKeyboard(modelKey)
+      {
+        reply_markup:
+          qualityKeyboard(
+            modelKey
+          )
+      }
     );
   }
 
@@ -2201,10 +2076,13 @@ async function onCallback(query) {
       `📐 CHOOSE ASPECT RATIO\n\n` +
       `${modelLabel(modelKey)}\n` +
       `Quality: ${qualityLabel(modelKey, qualityKey)}`,
-      ratioKeyboard(
-        modelKey,
-        qualityKey
-      )
+      {
+        reply_markup:
+          ratioKeyboard(
+            modelKey,
+            qualityKey
+          )
+      }
     );
   }
 
@@ -2238,7 +2116,10 @@ async function onCallback(query) {
         modelKey
       ))
     ) {
-      return;
+      return sendMessage(
+        chatId,
+        "🔒 This model is locked on your current plan."
+      );
     }
 
     await setFlow(
@@ -2276,6 +2157,10 @@ async function onCallback(query) {
     );
   }
 }
+
+/* =========================
+   MESSAGES
+========================= */
 
 async function onMessage(message) {
   const chatId =
@@ -2323,7 +2208,9 @@ async function onMessage(message) {
   }
 
   const text =
-    String(message.text || "").trim();
+    String(
+      message.text || ""
+    ).trim();
 
   if (!text) return;
 
@@ -2424,7 +2311,7 @@ async function onMessage(message) {
 
   if (
     isAdmin(userId) &&
-    command.startsWith("/admin")
+    command === "/admin"
   ) {
     return handleAdmin(
       chatId,
@@ -2472,9 +2359,9 @@ async function onMessage(message) {
   );
 }
 
-/* =========================================================
+/* =========================
    ADMIN
-========================================================= */
+========================= */
 
 function parseArgs(text) {
   return text
@@ -2500,7 +2387,10 @@ async function handleAdmin(
       .split(/\s+/)[0]
       .toLowerCase();
 
-  if (command === "/admin") {
+  if (
+    command === "/admin" &&
+    !args[0]
+  ) {
     return sendMessage(
       chatId,
       `👑 ADMIN\n\n` +
@@ -2526,7 +2416,10 @@ async function handleAdmin(
     target
   ) {
     const amount =
-      safeInt(args[2], 0);
+      safeInt(
+        args[2],
+        0
+      );
 
     await addCredits(
       target,
@@ -2637,7 +2530,7 @@ async function handleAdmin(
       chatId,
       `📊 PIXELMETA AI\n\n` +
       `Global generation limit: ${GLOBAL_GEN_LIMIT}\n` +
-      `Redis: ${redis ? "Connected" : "Missing"}\n` +
+      `Redis: ${redis ? "Configured" : "Missing"}\n` +
       `FAL: ${FAL_API_KEY ? "Configured" : "Missing"}\n` +
       `Replicate: ${REPLICATE_API_TOKEN ? "Configured" : "Missing"}`
     );
@@ -2649,9 +2542,9 @@ async function handleAdmin(
   );
 }
 
-/* =========================================================
-   EXPRESS / TELEGRAM WEBHOOK
-========================================================= */
+/* =========================
+   EXPRESS / WEBHOOK
+========================= */
 
 app.get("/", (req, res) => {
   res.status(200).send(
@@ -2659,57 +2552,98 @@ app.get("/", (req, res) => {
   );
 });
 
-app.get("/health", (req, res) => {
+app.get("/health", async (req, res) => {
+  let redisStatus = false;
+
+  if (redis) {
+    try {
+      redisStatus =
+        (await redis.ping()) === "PONG";
+    } catch {
+      redisStatus = false;
+    }
+  }
+
   res.json({
     ok: true,
     service: "pixlemorphic-ai-bot",
-    redis: Boolean(redis),
+    redis: redisStatus,
     fal: Boolean(FAL_API_KEY),
     replicate: Boolean(
       REPLICATE_API_TOKEN
     ),
-    time: new Date().toISOString()
+    telegram: Boolean(TG_TOKEN),
+    globalGenerationLimit:
+      GLOBAL_GEN_LIMIT,
+    time:
+      new Date().toISOString()
   });
 });
 
-app.post("/telegram/webhook", async (req, res) => {
-  try {
-    if (
-      TG_SECRET_TOKEN &&
-      req.headers["x-telegram-bot-api-secret-token"] !==
-        TG_SECRET_TOKEN
-    ) {
-      return res.status(401).send("Unauthorized");
-    }
+app.post(
+  "/telegram/webhook",
+  (req, res) => {
+    try {
+      if (
+        TG_SECRET_TOKEN &&
+        req.headers[
+          "x-telegram-bot-api-secret-token"
+        ] !== TG_SECRET_TOKEN
+      ) {
+        return res
+          .status(401)
+          .send("Unauthorized");
+      }
 
-    const update = req.body;
+      const update =
+        req.body;
 
-    if (update.callback_query) {
-      await onCallback(
-        update.callback_query
+      // Acknowledge Telegram immediately.
+      res.sendStatus(200);
+
+      // Process in background.
+      Promise.resolve()
+        .then(async () => {
+          if (
+            update.callback_query
+          ) {
+            await onCallback(
+              update.callback_query
+            );
+
+            return;
+          }
+
+          if (update.message) {
+            await onMessage(
+              update.message
+            );
+          }
+        })
+        .catch(
+          (error) => {
+            console.error(
+              "Webhook background error:",
+              error
+            );
+          }
+        );
+
+    } catch (error) {
+      console.error(
+        "Webhook error:",
+        error
       );
+
       return res.sendStatus(200);
     }
-
-    if (update.message) {
-      await onMessage(
-        update.message
-      );
-      return res.sendStatus(200);
-    }
-
-    return res.sendStatus(200);
-
-  } catch (error) {
-    console.error(
-      "Webhook error:",
-      error
-    );
-
-    return res.sendStatus(200);
   }
-});
-      
+);
+
+/* =========================
+   START
+========================= */
+
 app.listen(
   PORT,
   () => {
@@ -2720,12 +2654,28 @@ app.listen(
     console.log(
       `Global generation limit: ${GLOBAL_GEN_LIMIT}`
     );
+
+    console.log(
+      `Telegram configured: ${Boolean(TG_TOKEN)}`
+    );
+
+    console.log(
+      `Redis configured: ${Boolean(REDIS_URL)}`
+    );
+
+    console.log(
+      `FAL configured: ${Boolean(FAL_API_KEY)}`
+    );
+
+    console.log(
+      `Replicate configured: ${Boolean(REPLICATE_API_TOKEN)}`
+    );
   }
 );
 
 process.on(
   "unhandledRejection",
-  error => {
+  (error) => {
     console.error(
       "Unhandled rejection:",
       error
@@ -2735,12 +2685,10 @@ process.on(
 
 process.on(
   "uncaughtException",
-  error => {
+  (error) => {
     console.error(
       "Uncaught exception:",
       error
     );
   }
 );
-
-
