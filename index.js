@@ -16,15 +16,21 @@ app.disable("x-powered-by");
 
 const TG_TOKEN = process.env.TG_TOKEN;
 const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
-const FAL_API_KEY = process.env.FAL_API_KEY || process.env.FAL_KEY;
+const FAL_API_KEY =
+  process.env.FAL_API_KEY || process.env.FAL_KEY;
 const REDIS_URL = process.env.REDIS_URL;
-const TG_SECRET_TOKEN = process.env.TG_SECRET_TOKEN || "";
-const PORT = parseInt(process.env.PORT || "8080", 10);
+const TG_SECRET_TOKEN =
+  process.env.TG_SECRET_TOKEN || "";
+const PORT = parseInt(
+  process.env.PORT || "8080",
+  10
+);
 
 const ADMIN_ID = "1078816855";
 
 const FAL_FLUX_PRO_MODEL =
-  process.env.FAL_FLUX_PRO_MODEL || "fal-ai/flux-pro/v1.1-ultra";
+  process.env.FAL_FLUX_PRO_MODEL ||
+  "fal-ai/flux-pro/v1.1-ultra";
 
 const REPLICATE_SDXL_VERSION =
   "39ed52f2a78e934b3ba6f1f50c7b07c7a1c77d9b29b19a70c2b6c38b1f86c7c5";
@@ -60,7 +66,10 @@ if (REDIS_URL) {
   });
 
   redis.on("error", (err) => {
-    console.error("Redis error:", err.message);
+    console.error(
+      "Redis error:",
+      err.message
+    );
   });
 } else {
   console.warn("REDIS_URL missing");
@@ -87,8 +96,12 @@ const MODELS = {
     label: "🎬 Pixlemeta Cinematic",
     type: "t2i",
     qualities: {
-      "2k": { cost: 2 },
-      "4k": { cost: 4 }
+      "2k": {
+        cost: 2
+      },
+      "4k": {
+        cost: 4
+      }
     },
     engines: {
       primary: "fal_schnell",
@@ -98,24 +111,33 @@ const MODELS = {
 
   realism: {
     key: "realism",
-    label: "📸 Pixlemeta Realism (DSLR)",
+    label:
+      "📸 Pixlemeta Realism (DSLR)",
     type: "t2i",
     qualities: {
-      "2k": { cost: 6 },
-      "4k": { cost: 15 }
+      "2k": {
+        cost: 6
+      },
+      "4k": {
+        cost: 15
+      }
     },
     engines: {
-      primary: "fal_flux_ultra_realism",
+      primary:
+        "fal_flux_ultra_realism",
       backup: "replicate_sdxl"
     }
   },
 
   ultra8k: {
     key: "ultra8k",
-    label: "🟪 Pixlemeta Ultra 8K (True)",
+    label:
+      "🟪 Pixlemeta Ultra 8K (True)",
     type: "t2i",
     qualities: {
-      "8k": { cost: 30 }
+      "8k": {
+        cost: 30
+      }
     },
     engines: {
       primary: "fal_flux_pro_8k",
@@ -125,12 +147,19 @@ const MODELS = {
 
   shark: {
     key: "shark",
-    label: "🦈 Pixlemeta SHARK V1 (Premium Edit)",
+    label:
+      "🦈 Pixlemeta SHARK V1 (Premium Edit)",
     type: "i2i",
     qualities: {
-      "2k": { cost: 15 },
-      "4k": { cost: 25 },
-      "8k": { cost: 45 }
+      "2k": {
+        cost: 15
+      },
+      "4k": {
+        cost: 25
+      },
+      "8k": {
+        cost: 45
+      }
     },
     engines: {
       primary: "shark_v1_edit",
@@ -140,10 +169,19 @@ const MODELS = {
 };
 
 const PLAN_ACCESS = {
-  trial: new Set(["cinematic", "realism"]),
-  promo: new Set(Object.keys(MODELS)),
-  paid: new Set(Object.keys(MODELS)),
-  admin: new Set(Object.keys(MODELS))
+  trial: new Set([
+    "cinematic",
+    "realism"
+  ]),
+  promo: new Set(
+    Object.keys(MODELS)
+  ),
+  paid: new Set(
+    Object.keys(MODELS)
+  ),
+  admin: new Set(
+    Object.keys(MODELS)
+  )
 };
 
 /* =========================
@@ -202,167 +240,41 @@ const RATIOS = {
 ========================= */
 
 function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(
+    (resolve) =>
+      setTimeout(resolve, ms)
+  );
 }
 
-function safeInt(value, fallback = 0) {
-  const n = parseInt(value, 10);
-  return Number.isFinite(n) ? n : fallback;
+function safeInt(
+  value,
+  fallback = 0
+) {
+  const n = parseInt(
+    value,
+    10
+  );
+
+  return Number.isFinite(n)
+    ? n
+    : fallback;
 }
 
-function clampPrompt(text, maxLen = MAX_PROMPT_LEN) {
-  return String(text || "").trim().slice(0, maxLen);
+function clampPrompt(
+  text,
+  maxLen = MAX_PROMPT_LEN
+) {
+  return String(
+    text || ""
+  )
+    .trim()
+    .slice(0, maxLen);
 }
 
 function isAdmin(userId) {
-  return String(userId) === ADMIN_ID;
-}
-
-function getRatio(ratioKey) {
-  return RATIOS[ratioKey] || RATIOS.sq;
-}
-
-function ratioLabel(ratioKey) {
-  return getRatio(ratioKey).label;
-}
-
-function isValidModel(modelKey) {
-  return Boolean(MODELS[modelKey]);
-}
-
-function isValidQuality(modelKey, qualityKey) {
-  return Boolean(
-    MODELS[modelKey] &&
-    MODELS[modelKey].qualities[qualityKey]
+  return (
+    String(userId) === ADMIN_ID
   );
-}
-
-function modelLabel(modelKey) {
-  return MODELS[modelKey] ? MODELS[modelKey].label : modelKey;
-}
-
-function qualityLabel(modelKey, qualityKey) {
-  if (modelKey === "ultra8k") return "8K";
-  return String(qualityKey).toUpperCase();
-}
-
-function getCost(modelKey, qualityKey) {
-  const model = MODELS[modelKey];
-  if (!model) return null;
-
-  const quality = model.qualities[qualityKey];
-  if (!quality) return null;
-
-  return quality.cost;
-}
-
-/* =========================
-   TELEGRAM
-========================= */
-
-let tgLastCall = 0;
-
-async function tgThrottle() {
-  const elapsed = Date.now() - tgLastCall;
-
-  if (elapsed < TG_MIN_GAP_MS) {
-    await sleep(TG_MIN_GAP_MS - elapsed);
-  }
-
-  tgLastCall = Date.now();
-}
-
-function extractRetryAfterSec(error) {
-  const match = String(error?.message || "").match(
-    /retry after\s+(\d+)/i
-  );
-
-  return match ? safeInt(match[1], 1) : 1;
-}
-
-async function tgCall(method, body, retry = 0) {
-  if (!TG_TOKEN) {
-    throw new Error("TG_TOKEN missing");
-  }
-
-  await tgThrottle();
-
-  const response = await fetch(
-    `https://api.telegram.org/bot${TG_TOKEN}/${method}`,
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(body)
-    }
-  );
-
-  const data = await response.json();
-
-  if (!response.ok || !data.ok) {
-    const error = new Error(
-      data?.description ||
-      `Telegram API error ${response.status}`
-    );
-
-    error.response = data;
-
-    if (response.status === 429 && retry < 3) {
-      const wait = extractRetryAfterSec(error);
-
-      await sleep((wait + 1) * 1000);
-
-      return tgCall(method, body, retry + 1);
-    }
-
-    throw error;
-  }
-
-  return data.result;
-}
-
-async function sendMessage(chatId, text, extra = {}) {
-  return tgCall("sendMessage", {
-    chat_id: chatId,
-    text,
-    ...extra
-  });
-}
-
-async function sendPhoto(chatId, photo, caption = "") {
-  return tgCall("sendPhoto", {
-    chat_id: chatId,
-    photo,
-    caption
-  });
-}
-
-async function sendDocument(chatId, document, caption = "") {
-  return tgCall("sendDocument", {
-    chat_id: chatId,
-    document,
-    caption
-  });
-}
-
-async function answerCallbackQuery(callbackQueryId, text = "") {
-  return tgCall("answerCallbackQuery", {
-    callback_query_id: callbackQueryId,
-    text
-  });
-}
-
-async function tgGetFileUrl(fileId) {
-  const file = await tgCall("getFile", {
-    file_id: fileId
-  });
-
-  if (!file?.file_path) {
-    throw new Error("Telegram file path missing");
-  }
-
-  return `https://api.telegram.org/file/bot${TG_TOKEN}/${file.file_path}`;
 }
 
 /* =========================
@@ -370,399 +282,698 @@ async function tgGetFileUrl(fileId) {
 ========================= */
 
 async function rGet(key) {
-  if (!redis) return null;
-
-  try {
-    return await redis.get(key);
-  } catch (error) {
-    console.error("Redis GET:", error.message);
-    return null;
+  if (!redis) {
+    throw new Error(
+      "Redis is not configured"
+    );
   }
+
+  return redis.get(key);
 }
 
-async function rSet(key, value, ttl = null) {
-  if (!redis) return false;
-
-  try {
-    if (ttl) {
-      await redis.set(key, String(value), "EX", ttl);
-    } else {
-      await redis.set(key, String(value));
-    }
-
-    return true;
-  } catch (error) {
-    console.error("Redis SET:", error.message);
-    return false;
+async function rSet(
+  key,
+  value,
+  ttl = null
+) {
+  if (!redis) {
+    throw new Error(
+      "Redis is not configured"
+    );
   }
+
+  if (ttl) {
+    return redis.set(
+      key,
+      value,
+      "EX",
+      ttl
+    );
+  }
+
+  return redis.set(
+    key,
+    value
+  );
 }
 
 async function rDel(key) {
-  if (!redis) return false;
-
-  try {
-    await redis.del(key);
-    return true;
-  } catch (error) {
-    console.error("Redis DEL:", error.message);
-    return false;
-  }
-}
-
-async function ensureUser(userId) {
   if (!redis) {
-    throw new Error("Redis is not configured");
-  }
-
-  const planKey = `u:${userId}:plan`;
-  const creditsKey = `u:${userId}:credits`;
-
-  let plan = await rGet(planKey);
-
-  if (!plan) {
-    plan = isAdmin(userId) ? "admin" : "trial";
-    await rSet(planKey, plan);
-
-    if (!isAdmin(userId)) {
-      await rSet(
-        creditsKey,
-        PLAN_DEFAULT_CREDITS[plan]
-      );
-    }
-  }
-
-  return plan;
-}
-
-async function getPlan(userId) {
-  if (isAdmin(userId)) return "admin";
-
-  await ensureUser(userId);
-
-  return (await rGet(`u:${userId}:plan`)) || "trial";
-}
-
-async function setPlan(userId, plan) {
-  if (!Object.prototype.hasOwnProperty.call(
-    PLAN_DEFAULT_CREDITS,
-    plan
-  )) {
-    return false;
-  }
-
-  await rSet(`u:${userId}:plan`, plan);
-
-  if (!isAdmin(userId)) {
-    await rSet(
-      `u:${userId}:credits`,
-      PLAN_DEFAULT_CREDITS[plan]
+    throw new Error(
+      "Redis is not configured"
     );
   }
 
-  return true;
+  return redis.del(key);
 }
 
-async function getCredits(userId) {
+async function rIncr(key) {
+  if (!redis) {
+    throw new Error(
+      "Redis is not configured"
+    );
+  }
+
+  return redis.incr(key);
+}
+
+/* =========================
+   USER / PLAN
+========================= */
+
+async function getPlan(
+  userId
+) {
   if (isAdmin(userId)) {
-    return PLAN_DEFAULT_CREDITS.admin;
+    return "admin";
   }
 
-  await ensureUser(userId);
+  const plan =
+    await rGet(
+      `u:${userId}:plan`
+    );
 
-  return safeInt(
-    await rGet(`u:${userId}:credits`),
-    0
-  );
-}
-
-async function addCredits(userId, amount) {
-  if (isAdmin(userId)) return true;
-
-  amount = safeInt(amount, 0);
-
-  if (amount <= 0) return false;
-
-  const current = await getCredits(userId);
-
-  return rSet(
-    `u:${userId}:credits`,
-    current + amount
-  );
-}
-
-async function deductCredits(userId, amount) {
-  if (isAdmin(userId)) return true;
-
-  amount = safeInt(amount, 0);
-
-  if (amount <= 0) return false;
-
-  const current = await getCredits(userId);
-
-  if (current < amount) return false;
-
-  return rSet(
-    `u:${userId}:credits`,
-    current - amount
-  );
-}
-
-async function isBanned(userId) {
-  return (await rGet(`u:${userId}:banned`)) === "1";
-}
-
-async function setBan(userId, value) {
-  if (value) {
-    await rSet(`u:${userId}:banned`, "1");
-  } else {
-    await rDel(`u:${userId}:banned`);
+  if (
+    plan === "trial" ||
+    plan === "promo" ||
+    plan === "paid" ||
+    plan === "admin"
+  ) {
+    return plan;
   }
+
+  return "trial";
 }
 
-async function rateLimit(userId) {
-  const key = `rate:${userId}`;
-
-  if (await rGet(key)) return false;
-
-  await rSet(key, "1", 1);
-
-  return true;
-}
-
-async function acquireBusy(userId) {
-  const key = `busy:${userId}`;
-
-  if (await rGet(key)) return false;
+async function setPlan(
+  userId,
+  plan
+) {
+  if (
+    !PLAN_DEFAULT_CREDITS[
+      plan
+    ]
+  ) {
+    throw new Error(
+      "Invalid plan"
+    );
+  }
 
   await rSet(
-    key,
-    "1",
-    BUSY_LOCK_SECONDS
+    `u:${userId}:plan`,
+    plan
+  );
+
+  await rSet(
+    `u:${userId}:credits`,
+    PLAN_DEFAULT_CREDITS[
+      plan
+    ]
+  );
+}
+
+async function getCredits(
+  userId
+) {
+  if (isAdmin(userId)) {
+    return Infinity;
+  }
+
+  const value =
+    await rGet(
+      `u:${userId}:credits`
+    );
+
+  if (
+    value === null ||
+    value === undefined
+  ) {
+    return 0;
+  }
+
+  return Number(value);
+}
+
+async function ensureUser(
+  userId
+) {
+  if (isAdmin(userId)) {
+    await rSet(
+      `u:${userId}:plan`,
+      "admin"
+    );
+
+    return;
+  }
+
+  const existingPlan =
+    await rGet(
+      `u:${userId}:plan`
+    );
+
+  if (!existingPlan) {
+    await rSet(
+      `u:${userId}:plan`,
+      "trial"
+    );
+
+    await rSet(
+      `u:${userId}:credits`,
+      PLAN_DEFAULT_CREDITS.trial
+    );
+  } else {
+    const existingCredits =
+      await rGet(
+        `u:${userId}:credits`
+      );
+
+    if (
+      existingCredits === null
+    ) {
+      await rSet(
+        `u:${userId}:credits`,
+        PLAN_DEFAULT_CREDITS[
+          existingPlan
+        ] || 0
+      );
+    }
+  }
+}
+
+async function addCredits(
+  userId,
+  amount
+) {
+  const current =
+    await getCredits(userId);
+
+  if (current === Infinity) {
+    return true;
+  }
+
+  await rSet(
+    `u:${userId}:credits`,
+    Math.max(
+      0,
+      current + amount
+    )
   );
 
   return true;
 }
 
-async function releaseBusy(userId) {
-  await rDel(`busy:${userId}`);
-}
+async function deductCredits(
+  userId,
+  amount
+) {
+  if (isAdmin(userId)) {
+    return true;
+  }
 
-async function acquireGlobalSlot() {
-  if (!redis) return false;
+  if (!redis) {
+    throw new Error(
+      "Redis is not configured"
+    );
+  }
 
-  if (GLOBAL_GEN_LIMIT <= 0) {
+  const key =
+    `u:${userId}:credits`;
+
+  const current =
+    await getCredits(userId);
+
+  if (
+    current < amount
+  ) {
     return false;
   }
 
-  const key = "glob:gen";
-
-  for (let i = 0; i < 60; i++) {
-    try {
-      const result = await redis.eval(
-        `
-        local current =
-          tonumber(redis.call('GET', KEYS[1]) or '0')
-
-        local limit =
-          tonumber(ARGV[1])
-
-        if current < limit then
-          return redis.call('INCRBY', KEYS[1], 1)
-        end
-
-        return 0
-        `,
-        1,
-        key,
-        String(GLOBAL_GEN_LIMIT)
-      );
-
-      if (safeInt(result, 0) > 0) {
-        return true;
-      }
-    } catch (error) {
-      console.error(
-        "Global slot error:",
-        error.message
-      );
-
-      return false;
-    }
-
-    await sleep(400);
-  }
-
-  return false;
-}
-
-async function releaseGlobalSlot() {
-  if (!redis) return;
-
-  try {
+  const result =
     await redis.eval(
       `
       local current =
-        tonumber(redis.call('GET', KEYS[1]) or '0')
+        tonumber(redis.call(
+          "GET",
+          KEYS[1]
+        ) or "0")
 
-      if current <= 0 then
+      local cost =
+        tonumber(ARGV[1])
+
+      if current < cost then
         return 0
       end
 
-      return redis.call('DECR', KEYS[1])
+      redis.call(
+        "DECRBY",
+        KEYS[1],
+        cost
+      )
+
+      return 1
       `,
       1,
-      "glob:gen"
+      key,
+      amount
     );
-  } catch (error) {
-    console.error(
-      "Global release error:",
-      error.message
-    );
-  }
-}
 
-async function canAccess(userId, modelKey) {
-  const plan = await getPlan(userId);
-
-  const allowed = PLAN_ACCESS[plan];
-
-  if (!allowed) return false;
-
-  return allowed.has(modelKey);
+  return Number(result) === 1;
 }
 
 /* =========================
-   PROMPT / MODEL INFERENCE
+   BAN SYSTEM
 ========================= */
 
-function inferModelQualityFromText(text) {
-  const lower = String(text || "").toLowerCase();
+async function isBanned(
+  userId
+) {
+  const value =
+    await rGet(
+      `u:${userId}:banned`
+    );
 
-  let modelKey = "cinematic";
-  let qualityKey = "2k";
+  return value === "1";
+}
 
+async function setBan(
+  userId,
+  banned
+) {
+  if (banned) {
+    await rSet(
+      `u:${userId}:banned`,
+      "1"
+    );
+  } else {
+    await rDel(
+      `u:${userId}:banned`
+    );
+  }
+}
+
+/* =========================
+   ACCESS / MODEL HELPERS
+========================= */
+
+function isValidModel(
+  modelKey
+) {
+  return Boolean(
+    MODELS[modelKey]
+  );
+}
+
+function isValidQuality(
+  modelKey,
+  qualityKey
+) {
+  return Boolean(
+    MODELS[modelKey]?.qualities[
+      qualityKey
+    ]
+  );
+}
+
+function getCost(
+  modelKey,
+  qualityKey
+) {
   if (
-    lower.includes("shark") ||
-    lower.includes("edit")
+    !isValidQuality(
+      modelKey,
+      qualityKey
+    )
   ) {
-    modelKey = "shark";
-  } else if (
-    lower.includes("ultra") ||
-    lower.includes("8k")
-  ) {
-    modelKey = "ultra8k";
-    qualityKey = "8k";
-  } else if (
-    lower.includes("realism") ||
-    lower.includes("realistic") ||
-    lower.includes("dslr")
-  ) {
-    modelKey = "realism";
+    return null;
   }
 
-  if (
-    lower.includes("4k") &&
-    modelKey !== "ultra8k"
-  ) {
-    qualityKey = "4k";
-  }
-
-  return {
-    modelKey,
+  return MODELS[
+    modelKey
+  ].qualities[
     qualityKey
-  };
+  ].cost;
 }
 
-function inferRatioFromText(text) {
-  const match = String(text || "").match(
-    /\b(1:1|4:5|3:4|16:9|9:16)\b/
+function modelLabel(
+  modelKey
+) {
+  return (
+    MODELS[modelKey]?.label ||
+    modelKey
   );
-
-  if (!match) return "sq";
-
-  const value = match[1];
-
-  if (value === "1:1") return "sq";
-  if (value === "4:5") return "45";
-  if (value === "3:4") return "34";
-  if (value === "16:9") return "169";
-  if (value === "9:16") return "916";
-
-  return "sq";
 }
 
-function parseStructuredPrompt(text) {
-  const raw = String(text || "").trim();
+function qualityLabel(
+  modelKey,
+  qualityKey
+) {
+  const q =
+    MODELS[
+      modelKey
+    ]?.qualities[
+      qualityKey
+    ];
 
-  if (!raw) {
-    return {
-      prompt: "",
-      negative: ""
-    };
+  if (!q) {
+    return qualityKey;
   }
 
-  const negativeMatch = raw.match(
-    /(?:negative|negative prompt)\s*:\s*(.+)$/i
+  return qualityKey.toUpperCase();
+}
+
+function getRatio(
+  ratioKey
+) {
+  return (
+    RATIOS[ratioKey] ||
+    RATIOS.sq
   );
-
-  let prompt = raw;
-  let negative = "";
-
-  if (negativeMatch) {
-    negative = negativeMatch[1].trim();
-
-    prompt = raw
-      .replace(negativeMatch[0], "")
-      .trim();
-  }
-
-  return {
-    prompt,
-    negative
-  };
 }
 
-function buildPrompt(text) {
-  const parsed = parseStructuredPrompt(text);
+async function canAccess(
+  userId,
+  modelKey
+) {
+  const plan =
+    await getPlan(userId);
 
-  let prompt = clampPrompt(parsed.prompt);
-
-  if (parsed.negative) {
-    prompt +=
-      "\n\nNegative prompt: " +
-      clampPrompt(parsed.negative, 500);
-  }
-
-  return prompt;
+  return Boolean(
+    PLAN_ACCESS[
+      plan
+    ]?.has(modelKey)
+  );
 }
 
 /* =========================
-   FAL / REPLICATE
+   RATE LIMIT
 ========================= */
 
-async function falRun(endpoint, input) {
-  if (!FAL_API_KEY) {
-    throw new Error("FAL_API_KEY is missing");
+async function rateLimit(
+  userId
+) {
+  if (!redis) {
+    return true;
   }
 
-  const response = await fetch(
-    `https://fal.run/${endpoint}`,
+  const key =
+    `rate:${userId}`;
+
+  const exists =
+    await redis.get(key);
+
+  if (exists) {
+    return false;
+  }
+
+  await redis.set(
+    key,
+    "1",
+    "PX",
+    TG_MIN_GAP_MS
+  );
+
+  return true;
+}
+
+/* =========================
+   BUSY LOCK
+========================= */
+
+async function acquireBusy(
+  userId
+) {
+  if (!redis) {
+    return true;
+  }
+
+  const result =
+    await redis.set(
+      `busy:${userId}`,
+      "1",
+      "NX",
+      "EX",
+      BUSY_LOCK_SECONDS
+    );
+
+  return result === "OK";
+}
+
+async function releaseBusy(
+  userId
+) {
+  if (!redis) {
+    return;
+  }
+
+  await redis.del(
+    `busy:${userId}`
+  );
+}
+
+/* =========================
+   GLOBAL GENERATION LIMIT
+========================= */
+
+async function acquireGlobalSlot() {
+  if (!redis) {
+    return true;
+  }
+
+  const key =
+    "global:generation";
+
+  const count =
+    await redis.incr(key);
+
+  await redis.expire(
+    key,
+    300
+  );
+
+  if (
+    count >
+    GLOBAL_GEN_LIMIT
+  ) {
+    await redis.decr(
+      key
+    );
+
+    return false;
+  }
+
+  return true;
+}
+
+async function releaseGlobalSlot() {
+  if (!redis) {
+    return;
+  }
+
+  const key =
+    "global:generation";
+
+  const value =
+    await redis.decr(key);
+
+  if (value <= 0) {
+    await redis.del(key);
+  }
+}
+
+/* =========================
+   TELEGRAM API
+========================= */
+
+async function telegramRequest(
+  method,
+  body
+) {
+  if (!TG_TOKEN) {
+    throw new Error(
+      "TG_TOKEN is not configured"
+    );
+  }
+
+  const url =
+    `https://api.telegram.org/bot${TG_TOKEN}/${method}`;
+
+  for (
+    let attempt = 0;
+    attempt < 4;
+    attempt++
+  ) {
+    const response =
+      await fetch(
+        url,
+        {
+          method: "POST",
+          headers: {
+            "Content-Type":
+              "application/json"
+          },
+          body: JSON.stringify(
+            body
+          )
+        }
+      );
+
+    const data =
+      await response.json();
+
+    if (
+      response.status === 429
+    ) {
+      const retryAfter =
+        data?.parameters
+          ?.retry_after || 1;
+
+      await sleep(
+        retryAfter * 1000
+      );
+
+      continue;
+    }
+
+    if (
+      !response.ok ||
+      !data.ok
+    ) {
+      throw new Error(
+        `Telegram ${method} failed: ` +
+        JSON.stringify(data)
+      );
+    }
+
+    return data.result;
+  }
+
+  throw new Error(
+    `Telegram ${method} rate limited`
+  );
+}
+
+async function sendMessage(
+  chatId,
+  text,
+  extra = {}
+) {
+  return telegramRequest(
+    "sendMessage",
     {
-      method: "POST",
-      headers: {
-        Authorization: `Key ${FAL_API_KEY}`,
-        "Content-Type": "application/json"
-      },
-      body: JSON.stringify(input)
+      chat_id: chatId,
+      text,
+      ...extra
     }
   );
+}
 
-  const text = await response.text();
+async function sendPhoto(
+  chatId,
+  photo,
+  caption = ""
+) {
+  return telegramRequest(
+    "sendPhoto",
+    {
+      chat_id: chatId,
+      photo,
+      caption
+    }
+  );
+}
+
+async function sendDocument(
+  chatId,
+  document,
+  caption = ""
+) {
+  return telegramRequest(
+    "sendDocument",
+    {
+      chat_id: chatId,
+      document,
+      caption
+    }
+  );
+}
+
+async function answerCallbackQuery(
+  callbackQueryId
+) {
+  return telegramRequest(
+    "answerCallbackQuery",
+    {
+      callback_query_id:
+        callbackQueryId
+    }
+  );
+}
+
+async function tgGetFileUrl(
+  fileId
+) {
+  const file =
+    await telegramRequest(
+      "getFile",
+      {
+        file_id: fileId
+      }
+    );
+
+  if (!file?.file_path) {
+    throw new Error(
+      "Telegram file path missing"
+    );
+  }
+
+  return (
+    `https://api.telegram.org/file/bot` +
+    `${TG_TOKEN}/${file.file_path}`
+  );
+}
+
+/* =========================
+   FAL
+========================= */
+
+async function falRun(
+  model,
+  input
+) {
+  if (!FAL_API_KEY) {
+    throw new Error(
+      "FAL_API_KEY is not configured"
+    );
+  }
+
+  const url =
+    `https://fal.run/${model}`;
+
+  const response =
+    await fetch(
+      url,
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Key ${FAL_API_KEY}`,
+          "Content-Type":
+            "application/json"
+        },
+        body: JSON.stringify(
+          input
+        )
+      }
+    );
+
+  const text =
+    await response.text();
 
   let data;
 
   try {
-    data = JSON.parse(text);
+    data =
+      JSON.parse(text);
   } catch {
     data = {
       raw: text
@@ -779,74 +990,224 @@ async function falRun(endpoint, input) {
   return data;
 }
 
-function pickFirstImageUrl(data) {
-  if (!data) return null;
-
+function pickFirstImageUrl(
+  data
+) {
   if (
-    data.images &&
-    Array.isArray(data.images) &&
+    data?.images &&
+    Array.isArray(
+      data.images
+    ) &&
     data.images[0]
   ) {
     return (
       data.images[0].url ||
+      data.images[0].image_url ||
       data.images[0]
     );
   }
 
   if (
-    data.image &&
-    typeof data.image === "object"
+    data?.image?.url
   ) {
-    return (
-      data.image.url ||
-      data.image.uri ||
-      null
-    );
-  }
-
-  if (typeof data.image === "string") {
-    return data.image;
+    return data.image.url;
   }
 
   if (
-    data.output &&
-    Array.isArray(data.output) &&
-    data.output[0]
+    data?.output?.images &&
+    Array.isArray(
+      data.output.images
+    ) &&
+    data.output.images[0]
   ) {
-    const item = data.output[0];
+    return (
+      data.output.images[0].url ||
+      data.output.images[0]
+    );
+  }
 
-    if (typeof item === "string") {
-      return item;
-    }
-
-    return item.url || item.uri || null;
+  if (
+    typeof data?.url ===
+    "string"
+  ) {
+    return data.url;
   }
 
   return null;
 }
+
+/* =========================
+   PROMPT BUILDER
+========================= */
+
+function buildPrompt(
+  prompt
+) {
+  const clean =
+    clampPrompt(prompt);
+
+  if (!clean) {
+    return "";
+  }
+
+  return clean;
+}
+
+/* =========================
+   RATIO INFERENCE
+========================= */
+
+function inferRatioFromText(
+  text
+) {
+  const lower =
+    String(
+      text || ""
+    ).toLowerCase();
+
+  if (
+    lower.includes("9:16") ||
+    lower.includes(
+      "vertical"
+    ) ||
+    lower.includes(
+      "portrait ratio"
+    )
+  ) {
+    return "916";
+  }
+
+  if (
+    lower.includes("16:9") ||
+    lower.includes(
+      "landscape"
+    ) ||
+    lower.includes(
+      "cinematic wide"
+    )
+  ) {
+    return "169";
+  }
+
+  if (
+    lower.includes("4:5")
+  ) {
+    return "45";
+  }
+
+  if (
+    lower.includes("3:4")
+  ) {
+    return "34";
+  }
+
+  return "sq";
+}
+
+/* =========================
+   MODEL / QUALITY INFERENCE
+========================= */
+
+function inferModelQualityFromText(
+  text
+) {
+  const lower =
+    String(
+      text || ""
+    ).toLowerCase();
+
+  let modelKey =
+    "cinematic";
+
+  let qualityKey =
+    "2k";
+
+  if (
+    lower.includes(
+      "realism"
+    ) ||
+    lower.includes(
+      "realistic"
+    ) ||
+    lower.includes(
+      "dslr"
+    )
+  ) {
+    modelKey =
+      "realism";
+  }
+
+  if (
+    lower.includes(
+      "ultra 8k"
+    ) ||
+    lower.includes(
+      "8k"
+    )
+  ) {
+    modelKey =
+      "ultra8k";
+    qualityKey =
+      "8k";
+  }
+
+  if (
+    lower.includes(
+      "shark"
+    )
+  ) {
+    modelKey =
+      "shark";
+  }
+
+  if (
+    lower.includes(
+      "4k"
+    )
+  ) {
+    qualityKey =
+      "4k";
+  }
+
+  return {
+    modelKey,
+    qualityKey
+  };
+}
+
+/* =========================
+   FAL SCHNELL
+========================= */
 
 async function falSchnellGenerate(
   prompt,
   qualityKey,
   ratioKey
 ) {
-  const ratio = getRatio(ratioKey);
+  const ratio =
+    getRatio(
+      ratioKey
+    );
 
-  const input = {
-    prompt,
-    num_images: 1,
-    image_size: {
-      width: ratio.width,
-      height: ratio.height
-    }
-  };
+  const data =
+    await falRun(
+      "fal-ai/flux/schnell",
+      {
+        prompt,
+        image_size: {
+          width:
+            ratio.width,
+          height:
+            ratio.height
+        },
+        num_images: 1
+      }
+    );
 
-  const data = await falRun(
-    "fal-ai/flux/schnell",
-    input
-  );
-
-  const url = pickFirstImageUrl(data);
+  const url =
+    pickFirstImageUrl(
+      data
+    );
 
   if (!url) {
     throw new Error(
@@ -857,96 +1218,132 @@ async function falSchnellGenerate(
   return {
     url,
     type: "image",
-    ratio: ratio.label
+    ratio:
+      ratio.label,
+    approximate:
+      ratioKey === "45"
   };
 }
+
+/* =========================
+   FAL FLUX ULTRA REALISM
+========================= */
 
 async function falFluxUltraRealism(
   prompt,
   qualityKey,
   ratioKey
 ) {
-  const ratio = getRatio(ratioKey);
+  const ratio =
+    getRatio(
+      ratioKey
+    );
 
-  const input = {
-    prompt,
-    aspect_ratio: ratio.ultraAspect,
-    num_images: 1,
-    raw: true
-  };
+  const data =
+    await falRun(
+      "fal-ai/flux-pro/v1.1-ultra",
+      {
+        prompt,
+        aspect_ratio:
+          ratio.ultraAspect,
+        num_images: 1,
+        output_format:
+          "jpeg"
+      }
+    );
 
-  const data = await falRun(
-    "fal-ai/flux-pro/v1.1-ultra",
-    input
-  );
-
-  const url = pickFirstImageUrl(data);
+  const url =
+    pickFirstImageUrl(
+      data
+    );
 
   if (!url) {
     throw new Error(
-      "FAL Ultra returned no image"
+      "FAL Flux Ultra returned no image"
     );
   }
 
   return {
     url,
     type: "image",
-    ratio: ratio.label,
-    approximate: ratioKey === "45"
+    ratio:
+      ratio.label,
+    approximate:
+      !ratio.exact
   };
 }
+
+/* =========================
+   FAL FLUX PRO 8K
+========================= */
 
 async function falFluxProGenerate8K(
   prompt,
   qualityKey,
   ratioKey
 ) {
-  const ratio = getRatio(ratioKey);
+  const ratio =
+    getRatio(
+      ratioKey
+    );
 
-  const input = {
-    prompt,
-    aspect_ratio: ratio.ultraAspect,
-    num_images: 1,
-    raw: true
-  };
+  const data =
+    await falRun(
+      FAL_FLUX_PRO_MODEL,
+      {
+        prompt,
+        aspect_ratio:
+          ratio.ultraAspect,
+        num_images: 1,
+        output_format:
+          "png"
+      }
+    );
 
-  const data = await falRun(
-    FAL_FLUX_PRO_MODEL,
-    input
-  );
+  const url =
+    pickFirstImageUrl(
+      data
+    );
 
-  const baseUrl = pickFirstImageUrl(data);
-
-  if (!baseUrl) {
+  if (!url) {
     throw new Error(
-      "FAL Flux Pro returned no image"
+      "FAL Flux Pro 8K returned no image"
     );
   }
 
   return {
-    url: baseUrl,
+    url,
     type: "image",
-    ratio: ratio.label,
-    approximate: ratioKey === "45"
+    ratio:
+      ratio.label,
+    approximate:
+      !ratio.exact
   };
 }
 
+/* =========================
+   TOPAZ UPSCALE
+========================= */
+
 async function falTopazUpscale(
   imageUrl,
-  factor = 4
+  scale = 4
 ) {
-  const data = await falRun(
-    "fal-ai/topaz/upscale/image",
-    {
-      image_url: imageUrl,
-      upscale_factor: factor
-    }
-  );
+  const data =
+    await falRun(
+      "fal-ai/topaz/upscale/image",
+      {
+        image_url:
+          imageUrl,
+        upscale_factor:
+          scale
+      }
+    );
 
   const url =
-    pickFirstImageUrl(data) ||
-    data?.image?.url ||
-    data?.output?.url;
+    pickFirstImageUrl(
+      data
+    );
 
   if (!url) {
     throw new Error(
@@ -957,50 +1354,55 @@ async function falTopazUpscale(
   return url;
 }
 
-async function replicateSDXLGenerate(prompt) {
-  if (!REPLICATE_API_TOKEN) {
+/* =========================
+   REPLICATE SDXL
+========================= */
+
+async function replicateSDXLGenerate(
+  prompt
+) {
+  if (
+    !REPLICATE_API_TOKEN
+  ) {
     throw new Error(
-      "REPLICATE_API_TOKEN is missing"
+      "REPLICATE_API_TOKEN is not configured"
     );
   }
 
-  const createResponse = await fetch(
-    "https://api.replicate.com/v1/predictions",
-    {
-      method: "POST",
-      headers: {
-        Authorization:
-          `Bearer ${REPLICATE_API_TOKEN}`,
-        "Content-Type":
-          "application/json"
-      },
-      body: JSON.stringify({
-        version:
-          REPLICATE_SDXL_VERSION,
-        input: {
-          prompt
-        }
-      })
-    }
-  );
-
-  const createText =
-    await createResponse.text();
-
-  let prediction;
-
-  try {
-    prediction = JSON.parse(createText);
-  } catch {
-    throw new Error(
-      "Invalid Replicate response"
+  const createResponse =
+    await fetch(
+      "https://api.replicate.com/v1/predictions",
+      {
+        method: "POST",
+        headers: {
+          Authorization:
+            `Bearer ${REPLICATE_API_TOKEN}`,
+          "Content-Type":
+            "application/json"
+        },
+        body: JSON.stringify(
+          {
+            version:
+              REPLICATE_SDXL_VERSION,
+            input: {
+              prompt
+            }
+          }
+        )
+      }
     );
-  }
 
-  if (!createResponse.ok) {
+  const prediction =
+    await createResponse.json();
+
+  if (
+    !createResponse.ok
+  ) {
     throw new Error(
       `Replicate ${createResponse.status}: ` +
-      JSON.stringify(prediction)
+      JSON.stringify(
+        prediction
+      )
     );
   }
 
@@ -1013,28 +1415,46 @@ async function replicateSDXLGenerate(prompt) {
     );
   }
 
-  for (let i = 0; i < 90; i++) {
+  for (
+    let i = 0;
+    i < 90;
+    i++
+  ) {
     await sleep(2000);
 
     const response =
-      await fetch(predictionUrl, {
-        headers: {
-          Authorization:
-            `Bearer ${REPLICATE_API_TOKEN}`
+      await fetch(
+        predictionUrl,
+        {
+          headers: {
+            Authorization:
+              `Bearer ${REPLICATE_API_TOKEN}`
+          }
         }
-      });
+      );
 
     const data =
       await response.json();
 
-    if (data.status === "succeeded") {
-      const output = data.output;
+    if (
+      data.status ===
+      "succeeded"
+    ) {
+      const output =
+        data.output;
 
-      if (Array.isArray(output)) {
+      if (
+        Array.isArray(
+          output
+        )
+      ) {
         return output[0];
       }
 
-      if (typeof output === "string") {
+      if (
+        typeof output ===
+        "string"
+      ) {
         return output;
       }
 
@@ -1044,8 +1464,10 @@ async function replicateSDXLGenerate(prompt) {
     }
 
     if (
-      data.status === "failed" ||
-      data.status === "canceled"
+      data.status ===
+        "failed" ||
+      data.status ===
+        "canceled"
     ) {
       throw new Error(
         data.error ||
@@ -1058,13 +1480,13 @@ async function replicateSDXLGenerate(prompt) {
     "Replicate generation timed out"
   );
 }
-
 async function sharkV1EditPipeline(
   imageUrl,
   instruction,
   qualityKey
 ) {
-  const prompt = clampPrompt(instruction);
+  const prompt =
+    clampPrompt(instruction);
 
   if (!prompt) {
     throw new Error(
@@ -1072,17 +1494,19 @@ async function sharkV1EditPipeline(
     );
   }
 
-  const data = await falRun(
-    "fal-ai/flux/dev/image-to-image",
-    {
-      image_url: imageUrl,
-      prompt,
-      strength: 0.75,
-      num_images: 1
-    }
-  );
+  const data =
+    await falRun(
+      "fal-ai/flux/dev/image-to-image",
+      {
+        image_url: imageUrl,
+        prompt,
+        strength: 0.75,
+        num_images: 1
+      }
+    );
 
-  let url = pickFirstImageUrl(data);
+  let url =
+    pickFirstImageUrl(data);
 
   if (!url) {
     throw new Error(
@@ -1102,6 +1526,10 @@ async function sharkV1EditPipeline(
     type: "image"
   };
 }
+
+/* =========================
+   ENGINE ROUTER
+========================= */
 
 async function runEngine(
   engine,
@@ -1160,6 +1588,10 @@ async function runEngine(
   }
 }
 
+/* =========================
+   MODEL GENERATION
+========================= */
+
 async function generateWithModel(
   modelKey,
   qualityKey,
@@ -1167,21 +1599,30 @@ async function generateWithModel(
   ratioKey = "sq",
   extra = {}
 ) {
-  const model = MODELS[modelKey];
+  const model =
+    MODELS[modelKey];
 
   if (!model) {
-    throw new Error("Invalid model");
+    throw new Error(
+      "Invalid model"
+    );
   }
 
-  if (!model.qualities[qualityKey]) {
-    throw new Error("Invalid quality");
+  if (
+    !model.qualities[qualityKey]
+  ) {
+    throw new Error(
+      "Invalid quality"
+    );
   }
 
   const finalPrompt =
     buildPrompt(prompt);
 
   if (!finalPrompt) {
-    throw new Error("Prompt is empty");
+    throw new Error(
+      "Prompt is empty"
+    );
   }
 
   const primary =
@@ -1232,21 +1673,25 @@ function homeKeyboard() {
       [
         {
           text: "🖼️ IMAGE",
-          callback_data: "mode:image"
+          callback_data:
+            "mode:image"
         },
         {
           text: "🎬 VIDEO",
-          callback_data: "mode:video"
+          callback_data:
+            "mode:video"
         }
       ],
       [
         {
           text: "💳 Credits",
-          callback_data: "home:credits"
+          callback_data:
+            "home:credits"
         },
         {
           text: "📚 Models",
-          callback_data: "home:models"
+          callback_data:
+            "home:models"
         }
       ]
     ]
@@ -1258,47 +1703,62 @@ function imageKeyboard() {
     inline_keyboard: [
       [
         {
-          text: "🎬 Pixlemeta Cinematic",
-          callback_data: "m:cinematic"
+          text:
+            "🎬 Pixlemeta Cinematic",
+          callback_data:
+            "m:cinematic"
         }
       ],
       [
         {
-          text: "📸 Pixlemeta Realism",
-          callback_data: "m:realism"
+          text:
+            "📸 Pixlemeta Realism",
+          callback_data:
+            "m:realism"
         }
       ],
       [
         {
-          text: "🟪 Pixlemeta Ultra 8K",
-          callback_data: "m:ultra8k"
+          text:
+            "🟪 Pixlemeta Ultra 8K",
+          callback_data:
+            "m:ultra8k"
         }
       ],
       [
         {
-          text: "🦈 Pixlemeta SHARK V1",
-          callback_data: "m:shark"
+          text:
+            "🦈 Pixlemeta SHARK V1",
+          callback_data:
+            "m:shark"
         }
       ],
       [
         {
           text: "⬅️ Back",
-          callback_data: "x:home"
+          callback_data:
+            "x:home"
         },
         {
           text: "❌ Cancel",
-          callback_data: "x:cancel"
+          callback_data:
+            "x:cancel"
         }
       ]
     ]
   };
 }
 
-function qualityKeyboard(modelKey) {
-  const model = MODELS[modelKey];
+function qualityKeyboard(
+  modelKey
+) {
+  const model =
+    MODELS[modelKey];
 
   const buttons =
-    Object.keys(model.qualities).map(
+    Object.keys(
+      model.qualities
+    ).map(
       (q) => ({
         text:
           `${q.toUpperCase()} • ` +
@@ -1314,11 +1774,13 @@ function qualityKeyboard(modelKey) {
       [
         {
           text: "⬅️ Back",
-          callback_data: "x:back_models"
+          callback_data:
+            "x:back_models"
         },
         {
           text: "❌ Cancel",
-          callback_data: "x:cancel"
+          callback_data:
+            "x:cancel"
         }
       ]
     ]
@@ -1365,11 +1827,13 @@ function ratioKeyboard(
       [
         {
           text: "⬅️ Back",
-          callback_data: "x:back_quality"
+          callback_data:
+            "x:back_quality"
         },
         {
           text: "❌ Cancel",
-          callback_data: "x:cancel"
+          callback_data:
+            "x:cancel"
         }
       ]
     ]
@@ -1382,7 +1846,8 @@ function videoKeyboard() {
       [
         {
           text: "⬅️ Back",
-          callback_data: "x:home"
+          callback_data:
+            "x:home"
         }
       ]
     ]
@@ -1393,7 +1858,10 @@ function videoKeyboard() {
    FLOW
 ========================= */
 
-async function setFlow(userId, data) {
+async function setFlow(
+  userId,
+  data
+) {
   await rSet(
     `flow:${userId}`,
     JSON.stringify(data),
@@ -1401,11 +1869,17 @@ async function setFlow(userId, data) {
   );
 }
 
-async function getFlow(userId) {
+async function getFlow(
+  userId
+) {
   const raw =
-    await rGet(`flow:${userId}`);
+    await rGet(
+      `flow:${userId}`
+    );
 
-  if (!raw) return null;
+  if (!raw) {
+    return null;
+  }
 
   try {
     return JSON.parse(raw);
@@ -1414,8 +1888,12 @@ async function getFlow(userId) {
   }
 }
 
-async function clearFlow(userId) {
-  await rDel(`flow:${userId}`);
+async function clearFlow(
+  userId
+) {
+  await rDel(
+    `flow:${userId}`
+  );
 }
 
 async function showHome(
@@ -1430,13 +1908,21 @@ async function showHome(
 
   return sendMessage(
     chatId,
-    `🚀 PIXELMETA AI\n\n` +
-    `Create something extraordinary.\n\n` +
-    `💳 Plan: ${plan.toUpperCase()}\n` +
-    `⚡ Credits: ${credits}\n\n` +
+    `🚀 PIXELMETA AI
+
+` +
+    `Create something extraordinary.
+
+` +
+    `💳 Plan: ${plan.toUpperCase()}
+` +
+    `⚡ Credits: ${credits}
+
+` +
     `Choose what you want to create:`,
     {
-      reply_markup: homeKeyboard()
+      reply_markup:
+        homeKeyboard()
     }
   );
 }
@@ -1448,16 +1934,20 @@ async function showImageMenu(
   await setFlow(
     userId,
     {
-      step: "choose_model"
+      step:
+        "choose_model"
     }
   );
 
   return sendMessage(
     chatId,
-    `🖼️ IMAGE GENERATION\n\n` +
+    `🖼️ IMAGE GENERATION
+
+` +
     `Choose your engine:`,
     {
-      reply_markup: imageKeyboard()
+      reply_markup:
+        imageKeyboard()
     }
   );
 }
@@ -1466,21 +1956,36 @@ async function showVideoMenu(
   chatId,
   userId
 ) {
-  await clearFlow(userId);
+  await clearFlow(
+    userId
+  );
 
   return sendMessage(
     chatId,
-    `🎬 PIXELMETA VIDEO\n\n` +
-    `Video generation is coming soon.\n\n` +
-    `Our upcoming engines:\n\n` +
-    `⚡ Seedance\n` +
-    `🎥 Kling\n` +
-    `🌊 WAN\n` +
-    `✨ Veo\n` +
-    `🎞️ More cinematic models\n\n` +
+    `🎬 PIXELMETA VIDEO
+
+` +
+    `Video generation is coming soon.
+
+` +
+    `Our upcoming engines:
+
+` +
+    `⚡ Seedance
+` +
+    `🎥 Kling
+` +
+    `🌊 WAN
+` +
+    `✨ Veo
+` +
+    `🎞️ More cinematic models
+
+` +
     `🚧 Currently in development`,
     {
-      reply_markup: videoKeyboard()
+      reply_markup:
+        videoKeyboard()
     }
   );
 }
@@ -1497,11 +2002,15 @@ async function cmdCredits(
 
   return sendMessage(
     chatId,
-    `💳 YOUR CREDITS\n\n` +
-    `Plan: ${plan.toUpperCase()}\n` +
+    `💳 YOUR CREDITS
+
+` +
+    `Plan: ${plan.toUpperCase()}
+` +
     `Available credits: ${credits}`,
     {
-      reply_markup: homeKeyboard()
+      reply_markup:
+        homeKeyboard()
     }
   );
 }
@@ -1539,7 +2048,8 @@ async function cmdModels(
     chatId,
     lines.join("\n"),
     {
-      reply_markup: homeKeyboard()
+      reply_markup:
+        homeKeyboard()
     }
   );
 }
@@ -1589,8 +2099,11 @@ async function performGeneration(
   if (credits < cost) {
     await sendMessage(
       chatId,
-      `❌ Not enough credits.\n\n` +
-      `Required: ${cost}\n` +
+      `❌ Not enough credits.
+
+` +
+      `Required: ${cost}
+` +
       `Available: ${credits}`
     );
 
@@ -1598,7 +2111,9 @@ async function performGeneration(
   }
 
   if (
-    !(await acquireBusy(userId))
+    !(await acquireBusy(
+      userId
+    ))
   ) {
     await sendMessage(
       chatId,
@@ -1608,7 +2123,8 @@ async function performGeneration(
     return;
   }
 
-  let globalSlot = false;
+  let globalSlot =
+    false;
 
   try {
     globalSlot =
@@ -1628,10 +2144,19 @@ async function performGeneration(
 
     await sendMessage(
       chatId,
-      `🎨 GENERATING...\n\n` +
-      `${modelLabel(modelKey)}\n` +
-      `Quality: ${qualityLabel(modelKey, qualityKey)}\n` +
-      `Ratio: ${ratio.label}\n\n` +
+      `🎨 GENERATING...
+
+` +
+      `${modelLabel(modelKey)}
+` +
+      `Quality: ${qualityLabel(
+        modelKey,
+        qualityKey
+      )}
+` +
+      `Ratio: ${ratio.label}
+
+` +
       `Please wait...`
     );
 
@@ -1663,10 +2188,18 @@ async function performGeneration(
     }
 
     let caption =
-      `✨ PIXELMETA AI\n\n` +
-      `${modelLabel(modelKey)}\n` +
-      `Quality: ${qualityLabel(modelKey, qualityKey)}\n` +
-      `Ratio: ${ratio.label}\n` +
+      `✨ PIXELMETA AI
+
+` +
+      `${modelLabel(modelKey)}
+` +
+      `Quality: ${qualityLabel(
+        modelKey,
+        qualityKey
+      )}
+` +
+      `Ratio: ${ratio.label}
+` +
       `⚡ Used: ${cost} credits`;
 
     if (
@@ -1674,7 +2207,9 @@ async function performGeneration(
       ratioKey === "45"
     ) {
       caption +=
-        `\n\nℹ️ 4:5 uses the closest native base ratio on this engine.`;
+        `
+
+ℹ️ 4:5 uses the closest native base ratio on this engine.`;
     }
 
     if (
@@ -1701,11 +2236,17 @@ async function performGeneration(
     try {
       await sendMessage(
         chatId,
-        `❌ Generation failed.\n\n` +
-        `${error.message || "Unknown error"}\n\n` +
+        `❌ Generation failed.
+
+` +
+        `${error.message || "Unknown error"}
+
+` +
         `Your credits were not charged for this failed generation.`
       );
-    } catch (telegramError) {
+    } catch (
+      telegramError
+    ) {
       console.error(
         "Failed to send generation error:",
         telegramError.message
@@ -1716,7 +2257,9 @@ async function performGeneration(
       await releaseGlobalSlot();
     }
 
-    await releaseBusy(userId);
+    await releaseBusy(
+      userId
+    );
   }
 }
 
@@ -1726,10 +2269,14 @@ async function quickGen(
   text
 ) {
   const parsed =
-    inferModelQualityFromText(text);
+    inferModelQualityFromText(
+      text
+    );
 
   const ratioKey =
-    inferRatioFromText(text);
+    inferRatioFromText(
+      text
+    );
 
   const modelKey =
     parsed.modelKey;
@@ -1748,8 +2295,11 @@ async function quickGen(
   ) {
     await sendMessage(
       chatId,
-      `🦈 SHARK V1 requires an image.\n\n` +
-      `Send a photo and use:\n` +
+      `🦈 SHARK V1 requires an image.
+
+` +
+      `Send a photo and use:
+` +
       `/shark <edit instruction>`
     );
 
@@ -1764,7 +2314,9 @@ async function quickGen(
   ) {
     qualityKey =
       Object.keys(
-        MODELS[modelKey].qualities
+        MODELS[
+          modelKey
+        ].qualities
       )[0];
   }
 
@@ -1785,14 +2337,20 @@ async function cmdShark(
 ) {
   const instruction =
     text
-      .replace(/^\/shark/i, "")
+      .replace(
+        /^\/shark/i,
+        ""
+      )
       .trim();
 
   if (!instruction) {
     await sendMessage(
       chatId,
-      `🦈 SHARK V1\n\n` +
-      `Send a photo first, then use:\n` +
+      `🦈 SHARK V1
+
+` +
+      `Send a photo first, then use:
+` +
       `/shark <edit instruction>`
     );
 
@@ -1830,7 +2388,9 @@ async function cmdShark(
    CALLBACKS
 ========================= */
 
-async function onCallback(query) {
+async function onCallback(
+  query
+) {
   const userId =
     query.from?.id;
 
@@ -1840,7 +2400,12 @@ async function onCallback(query) {
   const data =
     query.data || "";
 
-  if (!userId || !chatId) return;
+  if (
+    !userId ||
+    !chatId
+  ) {
+    return;
+  }
 
   try {
     await answerCallbackQuery(
@@ -1853,8 +2418,12 @@ async function onCallback(query) {
     );
   }
 
-  if (data === "x:cancel") {
-    await clearFlow(userId);
+  if (
+    data === "x:cancel"
+  ) {
+    await clearFlow(
+      userId
+    );
 
     return sendMessage(
       chatId,
@@ -1866,51 +2435,67 @@ async function onCallback(query) {
     );
   }
 
-  if (data === "x:home") {
+  if (
+    data === "x:home"
+  ) {
     return showHome(
       chatId,
       userId
     );
   }
 
-  if (data === "mode:image") {
+  if (
+    data === "mode:image"
+  ) {
     return showImageMenu(
       chatId,
       userId
     );
   }
 
-  if (data === "mode:video") {
+  if (
+    data === "mode:video"
+  ) {
     return showVideoMenu(
       chatId,
       userId
     );
   }
 
-  if (data === "home:credits") {
+  if (
+    data === "home:credits"
+  ) {
     return cmdCredits(
       chatId,
       userId
     );
   }
 
-  if (data === "home:models") {
+  if (
+    data === "home:models"
+  ) {
     return cmdModels(
       chatId,
       userId
     );
   }
 
-  if (data === "x:back_models") {
+  if (
+    data === "x:back_models"
+  ) {
     return showImageMenu(
       chatId,
       userId
     );
   }
 
-  if (data === "x:back_quality") {
+  if (
+    data === "x:back_quality"
+  ) {
     const flow =
-      await getFlow(userId);
+      await getFlow(
+        userId
+      );
 
     if (
       flow?.modelKey
@@ -1918,15 +2503,21 @@ async function onCallback(query) {
       await setFlow(
         userId,
         {
-          step: "choose_quality",
-          modelKey: flow.modelKey
+          step:
+            "choose_quality",
+          modelKey:
+            flow.modelKey
         }
       );
 
       return sendMessage(
         chatId,
-        `⚙️ CHOOSE QUALITY\n\n` +
-        `${modelLabel(flow.modelKey)}`,
+        `⚙️ CHOOSE QUALITY
+
+` +
+        `${modelLabel(
+          flow.modelKey
+        )}`,
         {
           reply_markup:
             qualityKeyboard(
@@ -1942,11 +2533,17 @@ async function onCallback(query) {
     );
   }
 
-  if (data.startsWith("m:")) {
+  if (
+    data.startsWith("m:")
+  ) {
     const modelKey =
       data.slice(2);
 
-    if (!isValidModel(modelKey)) {
+    if (
+      !isValidModel(
+        modelKey
+      )
+    ) {
       return;
     }
 
@@ -1962,25 +2559,35 @@ async function onCallback(query) {
       );
     }
 
-    if (modelKey === "shark") {
-      await clearFlow(userId);
+    if (
+      modelKey === "shark"
+    ) {
+      await clearFlow(
+        userId
+      );
 
       return sendMessage(
         chatId,
-        `🦈 SHARK V1 — PREMIUM EDIT\n\n` +
-        `Send a photo, then use:\n\n` +
+        `🦈 SHARK V1 — PREMIUM EDIT
+
+` +
+        `Send a photo, then use:
+
+` +
         `/shark <edit instruction>`,
         {
           reply_markup: {
             inline_keyboard: [
               [
                 {
-                  text: "⬅️ Back",
+                  text:
+                    "⬅️ Back",
                   callback_data:
                     "x:back_models"
                 },
                 {
-                  text: "❌ Cancel",
+                  text:
+                    "❌ Cancel",
                   callback_data:
                     "x:cancel"
                 }
@@ -1994,15 +2601,20 @@ async function onCallback(query) {
     await setFlow(
       userId,
       {
-        step: "choose_quality",
+        step:
+          "choose_quality",
         modelKey
       }
     );
 
     return sendMessage(
       chatId,
-      `⚙️ CHOOSE QUALITY\n\n` +
-      `${modelLabel(modelKey)}`,
+      `⚙️ CHOOSE QUALITY
+
+` +
+      `${modelLabel(
+        modelKey
+      )}`,
       {
         reply_markup:
           qualityKeyboard(
@@ -2012,7 +2624,9 @@ async function onCallback(query) {
     );
   }
 
-  if (data.startsWith("q:")) {
+  if (
+    data.startsWith("q:")
+  ) {
     const parts =
       data.split(":");
 
@@ -2023,7 +2637,9 @@ async function onCallback(query) {
       parts[2];
 
     if (
-      !isValidModel(modelKey) ||
+      !isValidModel(
+        modelKey
+      ) ||
       !isValidQuality(
         modelKey,
         qualityKey
@@ -2051,13 +2667,20 @@ async function onCallback(query) {
       );
 
     const credits =
-      await getCredits(userId);
+      await getCredits(
+        userId
+      );
 
-    if (credits < cost) {
+    if (
+      credits < cost
+    ) {
       return sendMessage(
         chatId,
-        `❌ Not enough credits.\n\n` +
-        `Required: ${cost}\n` +
+        `❌ Not enough credits.
+
+` +
+        `Required: ${cost}
+` +
         `Available: ${credits}`
       );
     }
@@ -2065,7 +2688,8 @@ async function onCallback(query) {
     await setFlow(
       userId,
       {
-        step: "choose_ratio",
+        step:
+          "choose_ratio",
         modelKey,
         qualityKey
       }
@@ -2073,9 +2697,17 @@ async function onCallback(query) {
 
     return sendMessage(
       chatId,
-      `📐 CHOOSE ASPECT RATIO\n\n` +
-      `${modelLabel(modelKey)}\n` +
-      `Quality: ${qualityLabel(modelKey, qualityKey)}`,
+      `📐 CHOOSE ASPECT RATIO
+
+` +
+      `${modelLabel(
+        modelKey
+      )}
+` +
+      `Quality: ${qualityLabel(
+        modelKey,
+        qualityKey
+      )}`,
       {
         reply_markup:
           ratioKeyboard(
@@ -2086,7 +2718,9 @@ async function onCallback(query) {
     );
   }
 
-  if (data.startsWith("r:")) {
+  if (
+    data.startsWith("r:")
+  ) {
     const parts =
       data.split(":");
 
@@ -2100,7 +2734,9 @@ async function onCallback(query) {
       parts[3];
 
     if (
-      !isValidModel(modelKey) ||
+      !isValidModel(
+        modelKey
+      ) ||
       !isValidQuality(
         modelKey,
         qualityKey
@@ -2125,7 +2761,8 @@ async function onCallback(query) {
     await setFlow(
       userId,
       {
-        step: "await_prompt",
+        step:
+          "await_prompt",
         modelKey,
         qualityKey,
         ratioKey
@@ -2133,31 +2770,47 @@ async function onCallback(query) {
     );
 
     const ratio =
-      getRatio(ratioKey);
+      getRatio(
+        ratioKey
+      );
 
     let note = "";
 
     if (
       ratioKey === "45" &&
-      modelKey !== "cinematic"
+      modelKey !==
+        "cinematic"
     ) {
       note =
-        `\n\nℹ️ This engine uses its closest native base ratio for 4:5.`;
+        `
+
+ℹ️ This engine uses its closest native base ratio for 4:5.`;
     }
 
     return sendMessage(
       chatId,
-      `✍️ SEND YOUR PROMPT\n\n` +
-      `${modelLabel(modelKey)}\n` +
-      `Quality: ${qualityLabel(modelKey, qualityKey)}\n` +
+      `✍️ SEND YOUR PROMPT
+
+` +
+      `${modelLabel(
+        modelKey
+      )}
+` +
+      `Quality: ${qualityLabel(
+        modelKey,
+        qualityKey
+      )}
+` +
       `Ratio: ${ratio.label}` +
       note +
-      `\n\nExample:\n` +
+      `
+
+Example:
+` +
       `A cinematic portrait, dramatic lighting, ultra detailed`
     );
   }
 }
-
 /* =========================
    MESSAGES
 ========================= */
@@ -2169,7 +2822,9 @@ async function onMessage(message) {
   const userId =
     message.from?.id;
 
-  if (!chatId || !userId) return;
+  if (!chatId || !userId) {
+    return;
+  }
 
   if (
     await isBanned(userId)
@@ -2182,29 +2837,45 @@ async function onMessage(message) {
 
   await ensureUser(userId);
 
-  if (message.photo?.length) {
-    const photo =
-      message.photo[
-        message.photo.length - 1
-      ];
+  /* =========================
+     PHOTO / SHARK
+  ========================= */
 
-    const url =
-      await tgGetFileUrl(
-        photo.file_id
+  if (message.photo?.length) {
+    try {
+      const photo =
+        message.photo[
+          message.photo.length - 1
+        ];
+
+      const url =
+        await tgGetFileUrl(
+          photo.file_id
+        );
+
+      await rSet(
+        `shark:${userId}:image`,
+        url,
+        1800
       );
 
-    await rSet(
-      `shark:${userId}:image`,
-      url,
-      1800
-    );
+      return sendMessage(
+        chatId,
+        `📷 Image received.\n\n` +
+        `Now use:\n` +
+        `/shark <edit instruction>`
+      );
+    } catch (error) {
+      console.error(
+        "Photo handling error:",
+        error
+      );
 
-    return sendMessage(
-      chatId,
-      `📷 Image received.\n\n` +
-      `Now use:\n` +
-      `/shark <edit instruction>`
-    );
+      return sendMessage(
+        chatId,
+        "❌ Could not process this image. Please try again."
+      );
+    }
   }
 
   const text =
@@ -2212,7 +2883,9 @@ async function onMessage(message) {
       message.text || ""
     ).trim();
 
-  if (!text) return;
+  if (!text) {
+    return;
+  }
 
   if (
     !(await rateLimit(userId))
@@ -2234,8 +2907,16 @@ async function onMessage(message) {
       .join(" ")
       .trim();
 
-  if (command === "/start") {
-    await clearFlow(userId);
+  /* =========================
+     BASIC COMMANDS
+  ========================= */
+
+  if (
+    command === "/start"
+  ) {
+    await clearFlow(
+      userId
+    );
 
     return showHome(
       chatId,
@@ -2243,8 +2924,12 @@ async function onMessage(message) {
     );
   }
 
-  if (command === "/gen") {
-    await clearFlow(userId);
+  if (
+    command === "/gen"
+  ) {
+    await clearFlow(
+      userId
+    );
 
     if (args) {
       return quickGen(
@@ -2260,36 +2945,48 @@ async function onMessage(message) {
     );
   }
 
-  if (command === "/image") {
+  if (
+    command === "/image"
+  ) {
     return showImageMenu(
       chatId,
       userId
     );
   }
 
-  if (command === "/video") {
+  if (
+    command === "/video"
+  ) {
     return showVideoMenu(
       chatId,
       userId
     );
   }
 
-  if (command === "/credits") {
+  if (
+    command === "/credits"
+  ) {
     return cmdCredits(
       chatId,
       userId
     );
   }
 
-  if (command === "/models") {
+  if (
+    command === "/models"
+  ) {
     return cmdModels(
       chatId,
       userId
     );
   }
 
-  if (command === "/cancel") {
-    await clearFlow(userId);
+  if (
+    command === "/cancel"
+  ) {
+    await clearFlow(
+      userId
+    );
 
     return sendMessage(
       chatId,
@@ -2301,13 +2998,19 @@ async function onMessage(message) {
     );
   }
 
-  if (command === "/shark") {
+  if (
+    command === "/shark"
+  ) {
     return cmdShark(
       chatId,
       userId,
       text
     );
   }
+
+  /* =========================
+     ADMIN
+  ========================= */
 
   if (
     isAdmin(userId) &&
@@ -2320,11 +3023,16 @@ async function onMessage(message) {
     );
   }
 
+  /* =========================
+     ACTIVE GENERATION FLOW
+  ========================= */
+
   const flow =
     await getFlow(userId);
 
   if (
-    flow?.step === "await_prompt"
+    flow?.step ===
+    "await_prompt"
   ) {
     const prompt =
       clampPrompt(text);
@@ -2336,7 +3044,9 @@ async function onMessage(message) {
       );
     }
 
-    await clearFlow(userId);
+    await clearFlow(
+      userId
+    );
 
     return performGeneration(
       chatId,
@@ -2375,7 +3085,9 @@ async function handleAdmin(
   userId,
   text
 ) {
-  if (!isAdmin(userId)) {
+  if (
+    !isAdmin(userId)
+  ) {
     return;
   }
 
@@ -2393,14 +3105,23 @@ async function handleAdmin(
   ) {
     return sendMessage(
       chatId,
-      `👑 ADMIN\n\n` +
-      `/admin addcredit <id> <amount>\n` +
-      `/admin resetcredits <id>\n` +
-      `/admin settrial <id>\n` +
-      `/admin setpromo <id>\n` +
-      `/admin setpaid <id>\n` +
-      `/admin ban <id>\n` +
-      `/admin unban <id>\n` +
+      `👑 ADMIN PANEL
+
+` +
+      `/admin addcredit <id> <amount>
+` +
+      `/admin resetcredits <id>
+` +
+      `/admin settrial <id>
+` +
+      `/admin setpromo <id>
+` +
+      `/admin setpaid <id>
+` +
+      `/admin ban <id>
+` +
+      `/admin unban <id>
+` +
       `/admin stats`
     );
   }
@@ -2411,6 +3132,10 @@ async function handleAdmin(
   const target =
     args[1];
 
+  /* =========================
+     ADD CREDITS
+  ========================= */
+
   if (
     action === "addcredit" &&
     target
@@ -2420,6 +3145,15 @@ async function handleAdmin(
         args[2],
         0
       );
+
+    if (
+      amount <= 0
+    ) {
+      return sendMessage(
+        chatId,
+        "❌ Invalid credit amount."
+      );
+    }
 
     await addCredits(
       target,
@@ -2432,16 +3166,24 @@ async function handleAdmin(
     );
   }
 
+  /* =========================
+     RESET CREDITS
+  ========================= */
+
   if (
     action === "resetcredits" &&
     target
   ) {
     const plan =
-      await getPlan(target);
+      await getPlan(
+        target
+      );
 
     await rSet(
       `u:${target}:credits`,
-      PLAN_DEFAULT_CREDITS[plan] || 0
+      PLAN_DEFAULT_CREDITS[
+        plan
+      ] || 0
     );
 
     return sendMessage(
@@ -2449,6 +3191,10 @@ async function handleAdmin(
       `✅ Credits reset for ${target}.`
     );
   }
+
+  /* =========================
+     TRIAL
+  ========================= */
 
   if (
     action === "settrial" &&
@@ -2465,6 +3211,10 @@ async function handleAdmin(
     );
   }
 
+  /* =========================
+     PROMO
+  ========================= */
+
   if (
     action === "setpromo" &&
     target
@@ -2479,6 +3229,10 @@ async function handleAdmin(
       `✅ ${target} → promo`
     );
   }
+
+  /* =========================
+     PAID
+  ========================= */
 
   if (
     action === "setpaid" &&
@@ -2495,6 +3249,10 @@ async function handleAdmin(
     );
   }
 
+  /* =========================
+     BAN
+  ========================= */
+
   if (
     action === "ban" &&
     target
@@ -2509,6 +3267,10 @@ async function handleAdmin(
       `🚫 Banned ${target}.`
     );
   }
+
+  /* =========================
+     UNBAN
+  ========================= */
 
   if (
     action === "unban" &&
@@ -2525,14 +3287,37 @@ async function handleAdmin(
     );
   }
 
-  if (action === "stats") {
+  /* =========================
+     STATS
+  ========================= */
+
+  if (
+    action === "stats"
+  ) {
     return sendMessage(
       chatId,
-      `📊 PIXELMETA AI\n\n` +
-      `Global generation limit: ${GLOBAL_GEN_LIMIT}\n` +
-      `Redis: ${redis ? "Configured" : "Missing"}\n` +
-      `FAL: ${FAL_API_KEY ? "Configured" : "Missing"}\n` +
-      `Replicate: ${REPLICATE_API_TOKEN ? "Configured" : "Missing"}`
+      `📊 PIXELMETA AI
+
+` +
+      `Global generation limit: ${GLOBAL_GEN_LIMIT}
+` +
+      `Redis: ${
+        redis
+          ? "Configured"
+          : "Missing"
+      }
+` +
+      `FAL: ${
+        FAL_API_KEY
+          ? "Configured"
+          : "Missing"
+      }
+` +
+      `Replicate: ${
+        REPLICATE_API_TOKEN
+          ? "Configured"
+          : "Missing"
+      }`
     );
   }
 
@@ -2546,39 +3331,102 @@ async function handleAdmin(
    EXPRESS / WEBHOOK
 ========================= */
 
-app.get("/", (req, res) => {
-  res.status(200).send(
-    "PIXELMETA AI is alive."
-  );
-});
+app.get(
+  "/",
+  (req, res) => {
+    res
+      .status(200)
+      .send(
+        "PIXELMETA AI is alive."
+      );
+  }
+);
 
-app.get("/health", async (req, res) => {
-  let redisStatus = false;
+/* =========================
+   RAILWAY ROOT WEBHOOK
+   IMPORTANT FIX
+========================= */
 
-  if (redis) {
+app.post(
+  "/",
+  (req, res) => {
     try {
-      redisStatus =
-        (await redis.ping()) === "PONG";
-    } catch {
-      redisStatus = false;
+      if (
+        TG_SECRET_TOKEN &&
+        req.headers[
+          "x-telegram-bot-api-secret-token"
+        ] !== TG_SECRET_TOKEN
+      ) {
+        return res
+          .status(401)
+          .send(
+            "Unauthorized"
+          );
+      }
+
+      const update =
+        req.body;
+
+      /*
+       * Telegram ko immediately
+       * HTTP 200 response.
+       */
+      res.sendStatus(200);
+
+      /*
+       * Update ko background
+       * mein process karo.
+       */
+      Promise.resolve()
+        .then(
+          async () => {
+            if (
+              update?.callback_query
+            ) {
+              await onCallback(
+                update.callback_query
+              );
+
+              return;
+            }
+
+            if (
+              update?.message
+            ) {
+              await onMessage(
+                update.message
+              );
+            }
+          }
+        )
+        .catch(
+          (error) => {
+            console.error(
+              "Root webhook background error:",
+              error
+            );
+          }
+        );
+    } catch (error) {
+      console.error(
+        "Root webhook error:",
+        error
+      );
+
+      /*
+       * Telegram ko 200 dena
+       * zaroori hai.
+       */
+      return res.sendStatus(
+        200
+      );
     }
   }
+);
 
-  res.json({
-    ok: true,
-    service: "pixlemorphic-ai-bot",
-    redis: redisStatus,
-    fal: Boolean(FAL_API_KEY),
-    replicate: Boolean(
-      REPLICATE_API_TOKEN
-    ),
-    telegram: Boolean(TG_TOKEN),
-    globalGenerationLimit:
-      GLOBAL_GEN_LIMIT,
-    time:
-      new Date().toISOString()
-  });
-});
+/* =========================
+   TELEGRAM WEBHOOK
+========================= */
 
 app.post(
   "/telegram/webhook",
@@ -2592,34 +3440,45 @@ app.post(
       ) {
         return res
           .status(401)
-          .send("Unauthorized");
+          .send(
+            "Unauthorized"
+          );
       }
 
       const update =
         req.body;
 
-      // Acknowledge Telegram immediately.
+      /*
+       * Telegram ko immediately
+       * acknowledge.
+       */
       res.sendStatus(200);
 
-      // Process in background.
+      /*
+       * Background processing.
+       */
       Promise.resolve()
-        .then(async () => {
-          if (
-            update.callback_query
-          ) {
-            await onCallback(
-              update.callback_query
-            );
+        .then(
+          async () => {
+            if (
+              update?.callback_query
+            ) {
+              await onCallback(
+                update.callback_query
+              );
 
-            return;
-          }
+              return;
+            }
 
-          if (update.message) {
-            await onMessage(
-              update.message
-            );
+            if (
+              update?.message
+            ) {
+              await onMessage(
+                update.message
+              );
+            }
           }
-        })
+        )
         .catch(
           (error) => {
             console.error(
@@ -2628,20 +3487,69 @@ app.post(
             );
           }
         );
-
     } catch (error) {
       console.error(
         "Webhook error:",
         error
       );
 
-      return res.sendStatus(200);
+      return res.sendStatus(
+        200
+      );
     }
   }
 );
 
 /* =========================
-   START
+   HEALTH
+========================= */
+
+app.get(
+  "/health",
+  async (req, res) => {
+    let redisStatus =
+      false;
+
+    if (redis) {
+      try {
+        redisStatus =
+          (
+            await redis.ping()
+          ) === "PONG";
+      } catch {
+        redisStatus =
+          false;
+      }
+    }
+
+    res.json({
+      ok: true,
+      service:
+        "pixlemorphic-ai-bot",
+      redis:
+        redisStatus,
+      fal:
+        Boolean(
+          FAL_API_KEY
+        ),
+      replicate:
+        Boolean(
+          REPLICATE_API_TOKEN
+        ),
+      telegram:
+        Boolean(
+          TG_TOKEN
+        ),
+      globalGenerationLimit:
+        GLOBAL_GEN_LIMIT,
+      time:
+        new Date().toISOString()
+    });
+  }
+);
+
+/* =========================
+   START SERVER
 ========================= */
 
 app.listen(
@@ -2656,22 +3564,34 @@ app.listen(
     );
 
     console.log(
-      `Telegram configured: ${Boolean(TG_TOKEN)}`
+      `Telegram configured: ${Boolean(
+        TG_TOKEN
+      )}`
     );
 
     console.log(
-      `Redis configured: ${Boolean(REDIS_URL)}`
+      `Redis configured: ${Boolean(
+        REDIS_URL
+      )}`
     );
 
     console.log(
-      `FAL configured: ${Boolean(FAL_API_KEY)}`
+      `FAL configured: ${Boolean(
+        FAL_API_KEY
+      )}`
     );
 
     console.log(
-      `Replicate configured: ${Boolean(REPLICATE_API_TOKEN)}`
+      `Replicate configured: ${Boolean(
+        REPLICATE_API_TOKEN
+      )}`
     );
   }
 );
+
+/* =========================
+   PROCESS ERROR HANDLERS
+========================= */
 
 process.on(
   "unhandledRejection",
