@@ -956,7 +956,7 @@ async function falRun(
   }
 
   const response = await fetch(
-    `https://queue.fal.run/${endpoint}`,
+    `https://fal.run/${endpoint}`,
     {
       method: "POST",
       headers: {
