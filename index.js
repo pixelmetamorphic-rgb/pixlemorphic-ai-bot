@@ -2679,30 +2679,37 @@ app.post("/telegram/webhook", async (req, res) => {
       req.headers["x-telegram-bot-api-secret-token"] !==
         TG_SECRET_TOKEN
     ) {
-      return res
-        .status(401)
-           if (update.callback_query) {
-        await onCallback(
-          update.callback_query
-        );
-        return;
-      }
-
-      if (update.message) {
-        await onMessage(
-          update.message
-        );
-        return;
-      }
-
-    } catch (error) {
-      console.error(
-        "Webhook error:",
-        error
-      );
+      return res.status(401).send("Unauthorized");
     }
-  });
 
+    const update = req.body;
+
+    if (update.callback_query) {
+      await onCallback(
+        update.callback_query
+      );
+      return res.sendStatus(200);
+    }
+
+    if (update.message) {
+      await onMessage(
+        update.message
+      );
+      return res.sendStatus(200);
+    }
+
+    return res.sendStatus(200);
+
+  } catch (error) {
+    console.error(
+      "Webhook error:",
+      error
+    );
+
+    return res.sendStatus(200);
+  }
+});
+      
 app.listen(
   PORT,
   () => {
