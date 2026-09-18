@@ -498,7 +498,6 @@ async function deductCredits(
 
   const key =
     `u:${userId}:credits`;
-
   const current =
     await getCredits(userId);
 
@@ -997,8 +996,7 @@ function pickFirstImageUrl(
     data?.images &&
     Array.isArray(
       data.images
-    ) &&
-    data.images[0]
+    ) &&    data.images[0]
   ) {
     return (
       data.images[0].url ||
@@ -1497,8 +1495,7 @@ async function sharkV1EditPipeline(
   const data =
     await falRun(
       "fal-ai/flux/dev/image-to-image",
-      {
-        image_url: imageUrl,
+      {        image_url: imageUrl,
         prompt,
         strength: 0.75,
         num_images: 1
@@ -1671,28 +1668,12 @@ function homeKeyboard() {
   return {
     inline_keyboard: [
       [
-        {
-          text: "🖼️ IMAGE",
-          callback_data:
-            "mode:image"
-        },
-        {
-          text: "🎬 VIDEO",
-          callback_data:
-            "mode:video"
-        }
+        { text: "🖼 IMAGE STUDIO", callback_data: "mode:image" },
+        { text: "🎬 VIDEO STUDIO", callback_data: "mode:video" }
       ],
       [
-        {
-          text: "💳 Credits",
-          callback_data:
-            "home:credits"
-        },
-        {
-          text: "📚 Models",
-          callback_data:
-            "home:models"
-        }
+        { text: "💳 Credits", callback_data: "home:credits" },
+        { text: "📚 Model Catalog", callback_data: "home:models" }
       ]
     ]
   };
@@ -1702,48 +1683,27 @@ function imageKeyboard() {
   return {
     inline_keyboard: [
       [
-        {
-          text:
-            "🎬 Pixlemeta Cinematic",
-          callback_data:
-            "m:cinematic"
-        }
+        { text: "🎬 Cinematic ✅", callback_data: "m:cinematic" },
+        { text: "📸 Realism ✅", callback_data: "m:realism" }
       ],
       [
-        {
-          text:
-            "📸 Pixlemeta Realism",
-          callback_data:
-            "m:realism"
-        }
+        { text: "🟪 Ultra 8K ✅", callback_data: "m:ultra8k" },
+        { text: "✏️ EDIT 🧪", callback_data: "soon:edit" }
       ],
       [
-        {
-          text:
-            "🟪 Pixlemeta Ultra 8K",
-          callback_data:
-            "m:ultra8k"
-        }
+        { text: "🌱 Seedream 4.0 🧪", callback_data: "soon:seedream4" },
+        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "soon:fluxdev" }
       ],
       [
-        {
-          text:
-            "🦈 Pixlemeta SHARK V1",
-          callback_data:
-            "m:shark"
-        }
+        { text: "🧠 GPT Image 2 🧪", callback_data: "soon:gptimage2" }
       ],
       [
-        {
-          text: "⬅️ Back",
-          callback_data:
-            "x:home"
-        },
-        {
-          text: "❌ Cancel",
-          callback_data:
-            "x:cancel"
-        }
+        { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" },
+        { text: "🍌 Nano Banana Pro • SOON", callback_data: "soon:nanop" }
+      ],
+      [
+        { text: "⬅️ Back", callback_data: "x:home" },
+        { text: "❌ Cancel", callback_data: "x:cancel" }
       ]
     ]
   };
@@ -1843,13 +1803,18 @@ function ratioKeyboard(
 function videoKeyboard() {
   return {
     inline_keyboard: [
-      [
-        {
-          text: "⬅️ Back",
-          callback_data:
-            "x:home"
-        }
-      ]
+      [{ text: "⚡ Wan 2.2 • COMING SOON", callback_data: "v:soon:wan22" }],
+      [{ text: "🎞️ LTX-2 • COMING SOON", callback_data: "v:soon:ltx2" }],
+      [{ text: "🎥 Kling 3.0 • COMING SOON", callback_data: "v:soon:kling3" }],
+      [{ text: "🌊 Wan 2.7 • COMING SOON", callback_data: "v:soon:wan27" }],
+      [{ text: "🚀 Seedance 2.0 Fast • COMING SOON", callback_data: "v:soon:seedance20fast" }],
+      [{ text: "🎬 Seedance 2.0 • COMING SOON", callback_data: "v:soon:seedance20" }],
+      [{ text: "🔥 Seedance 2.5 • COMING SOON", callback_data: "v:soon:seedance25" }],
+      [{ text: "✨ Gemini Omni 1.1 Flash • COMING SOON", callback_data: "v:soon:geminiomni" }],
+      [{ text: "🎥 Veo 3.1 • COMING SOON", callback_data: "v:soon:veo31" }],
+      [{ text: "⚡ Kling 3.0 Turbo Pro • COMING SOON", callback_data: "v:soon:kling3turbo" }],
+      [{ text: "⚙️ Video Settings • COMING SOON", callback_data: "v:settings" }],
+      [{ text: "⬅️ Back", callback_data: "x:home" }]
     ]
   };
 }
@@ -1900,30 +1865,20 @@ async function showHome(
   chatId,
   userId
 ) {
-  const plan =
-    await getPlan(userId);
-
-  const credits =
-    await getCredits(userId);
+  const plan = await getPlan(userId);
+  const credits = await getCredits(userId);
 
   return sendMessage(
     chatId,
-    `🚀 PIXELMETA AI
+    `🚀 PIXLEMORPHIC AI
 
-` +
-    `Create something extraordinary.
+AI Image & Video Studio
 
-` +
-    `💳 Plan: ${plan.toUpperCase()}
-` +
-    `⚡ Credits: ${credits}
+💳 Plan: ${plan.toUpperCase()}
+⚡ Credits: ${credits}
 
-` +
-    `Choose what you want to create:`,
-    {
-      reply_markup:
-        homeKeyboard()
-    }
+Choose a studio:`,
+    { reply_markup: homeKeyboard() }
   );
 }
 
@@ -1931,24 +1886,17 @@ async function showImageMenu(
   chatId,
   userId
 ) {
-  await setFlow(
-    userId,
-    {
-      step:
-        "choose_model"
-    }
-  );
+  await setFlow(userId, { step: "choose_model" });
 
   return sendMessage(
     chatId,
-    `🖼️ IMAGE GENERATION
+    `🖼 PIXELMETA IMAGE STUDIO
 
-` +
-    `Choose your engine:`,
-    {
-      reply_markup:
-        imageKeyboard()
-    }
+✅ Live models are ready to generate.
+🧪 New FAL models are being connected for today's test.
+
+Choose a model:`,
+    { reply_markup: imageKeyboard() }
   );
 }
 
@@ -1956,37 +1904,23 @@ async function showVideoMenu(
   chatId,
   userId
 ) {
-  await clearFlow(
-    userId
-  );
+  await clearFlow(userId);
 
   return sendMessage(
     chatId,
-    `🎬 PIXELMETA VIDEO
+    `🎬 PIXELMETA VIDEO STUDIO
 
-` +
-    `Video generation is coming soon.
+Video model integration is staged for the next test cycle.
 
-` +
-    `Our upcoming engines:
+🎛 Planned controls
+• Quality: 480p / 580p / 720p / 1080p / 4K
+• Duration: 5s / 8s / 10s / 15s
+• FPS: 24 / 30
+• Audio: On / Off
+• Ratio: 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9
 
-` +
-    `⚡ Seedance
-` +
-    `🎥 Kling
-` +
-    `🌊 WAN
-` +
-    `✨ Veo
-` +
-    `🎞️ More cinematic models
-
-` +
-    `🚧 Currently in development`,
-    {
-      reply_markup:
-        videoKeyboard()
-    }
+No video credits are consumed while models are marked COMING SOON.`,
+    { reply_markup: videoKeyboard() }
   );
 }
 
@@ -2019,38 +1953,38 @@ async function cmdModels(
   chatId,
   userId
 ) {
-  const plan =
-    await getPlan(userId);
+  const plan = await getPlan(userId);
 
   const lines = [
-    `📚 PIXELMETA MODELS`,
-    ``,
-    `🎬 Cinematic`,
-    `2K • 2 credits`,
-    `4K • 4 credits`,
-    ``,
-    `📸 Realism`,
-    `2K • 6 credits`,
-    `4K • 15 credits`,
-    ``,
-    `🟪 Ultra 8K`,
-    `8K • 30 credits`,
-    ``,
-    `🦈 SHARK V1`,
-    `2K • 15 credits`,
-    `4K • 25 credits`,
-    `8K • 45 credits`,
-    ``,
+    "📚 PIXELMETA MODEL CATALOG",
+    "",
+    "✅ LIVE IMAGE",
+    "🎬 Cinematic • 2K / 4K",
+    "📸 Realism • 2K / 4K",
+    "🟪 Ultra 8K • 8K",
+    "",
+    "🧪 IMAGE — NEXT TEST",
+    "✏️ EDIT • FLUX.1 Kontext Pro",
+    "🌱 Seedream 4.0",
+    "⚡ FLUX.1 [dev]",
+    "🧠 GPT Image 2",
+    "",
+    "⏳ UPCOMING",
+    "🍌 Nano Banana 2",
+    "🍌 Nano Banana Pro",
+    "",
+    "🎬 VIDEO — COMING SOON",
+    "Wan 2.2 • LTX-2 • Kling 3.0 • Wan 2.7",
+    "Seedance 2.0 Fast • Seedance 2.0 • Seedance 2.5",
+    "Gemini Omni 1.1 Flash • Veo 3.1 • Kling 3.0 Turbo Pro",
+    "",
     `Your plan: ${plan.toUpperCase()}`
   ];
 
   return sendMessage(
     chatId,
     lines.join("\n"),
-    {
-      reply_markup:
-        homeKeyboard()
-    }
+    { reply_markup: homeKeyboard() }
   );
 }
 
@@ -2197,8 +2131,7 @@ async function performGeneration(
         modelKey,
         qualityKey
       )}
-` +
-      `Ratio: ${ratio.label}
+` +      `Ratio: ${ratio.label}
 ` +
       `⚡ Used: ${cost} credits`;
 
@@ -2534,6 +2467,17 @@ async function onCallback(
   }
 
   if (
+    data.startsWith("soon:") ||
+    data.startsWith("v:soon:") ||
+    data === "v:settings"
+  ) {
+    return sendMessage(
+      chatId,
+      "🚧 COMING SOON\n\nThis model is visible in the Studio UI but is not connected yet.\n\nNo credits were charged."
+    );
+  }
+
+  if (
     data.startsWith("m:")
   ) {
     const modelKey =
@@ -2698,7 +2642,6 @@ async function onCallback(
     return sendMessage(
       chatId,
       `📐 CHOOSE ASPECT RATIO
-
 ` +
       `${modelLabel(
         modelKey
@@ -3197,8 +3140,7 @@ async function handleAdmin(
   ========================= */
 
   if (
-    action === "settrial" &&
-    target
+    action === "settrial" &&    target
   ) {
     await setPlan(
       target,
