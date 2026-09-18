@@ -3,7 +3,7 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node -e 'const fs=require(\"fs\"),p=\"index.js\";let s=fs.readFileSync(p,\"utf8\");if(!s.includes(\"fal-ai/flux-pro/kontext\")){s=s.replace(/shark/g,\"edit\").replace(/SHARK V1/g,\"PIXLEMETA EDIT\").replace(/🦈/g,\"✏️\").replace(/Pixlemeta PIXLEMETA EDIT/g,\"Pixlemeta EDIT\").replace(/edit_v1_edit/g,\"kontext_pro_edit\").replace(/editV1EditPipeline/g,\"kontextProEditPipeline\").replace(/fal-ai\\/flux\\/dev\\/image-to-image/g,\"fal-ai/flux-pro/kontext\").replace(\"        strength: 0.75,\\n\",\"\").replace(`\\n  if (qualityKey === \"8k\") {\\n    url = await falTopazUpscale(\\n      url,\\n      4\\n    );\\n  }\\n`,\"\\n\");fs.writeFileSync(p,s,\"utf8\")}require(\"./index.js\")'"
+    "start": "node boot.js"
   },
   "dependencies": {
     "express": "^4.19.2",
