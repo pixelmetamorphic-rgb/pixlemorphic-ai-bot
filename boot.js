@@ -2,63 +2,170 @@
 const fs=require("fs"),path=require("path");
 const indexPath=path.join(__dirname,"index.js");
 let source=fs.readFileSync(indexPath,"utf8");
-function replaceBetween(s,start,end,replacement){const a=s.indexOf(start),b=s.indexOf(end,a+start.length);if(a<0||b<0)throw new Error("Bootstrap marker missing: "+start);return s.slice(0,a)+replacement+s.slice(b);}
 
+function replaceBetween(s,start,end,replacement){
+  const a=s.indexOf(start),b=s.indexOf(end,a+start.length);
+  if(a<0||b<0) throw new Error("Bootstrap marker missing: "+start);
+  return s.slice(0,a)+replacement+s.slice(b);
+}
+function replaceFunction(s,name,replacement){
+  const re=new RegExp("function "+name+"\\s*\\([^]*?\\n}\\n\\n(?=function |/\\*)");
+  if(!re.test(s)) throw new Error("Bootstrap function missing: "+name);
+  return s.replace(re,replacement+"\n\n");
+}
+
+/* SHARK -> Pixlemeta EDIT / Kontext Pro */
+source=source
+  .replace(/shark_v1_edit/g,"kontext_pro_edit")
+  .replace(/sharkV1EditPipeline/g,"kontextProEditPipeline")
+  .replace(/fal-ai\/flux\/dev\/image-to-image/g,"fal-ai/flux-pro/kontext")
+  .replace(/\/shark/g,"/edit")
+  .replace(/cmdShark/g,"cmdEdit")
+  .replace(/SHARK V1/g,"PIXLEMETA EDIT")
+  .replace(/🦈/g,"✏️")
+  .replace(/shark/g,"edit");
+
+/* TODAY'S FAL MODEL REGISTRY
+   Existing working models stay intact.
+   New models activated today are FAL-only.
+   WaveSpeed models remain tomorrow's work.
+*/
 const models=`const MODELS = {
   cinematic:{key:"cinematic",label:"🎬 Pixlemeta Cinematic",type:"t2i",qualities:{"2k":{cost:2},"4k":{cost:4}},engines:{primary:"fal_schnell",backup:null}},
   realism:{key:"realism",label:"📸 Pixlemeta Realism (DSLR)",type:"t2i",qualities:{"2k":{cost:6},"4k":{cost:15}},engines:{primary:"fal_flux_ultra_realism",backup:"replicate_sdxl"}},
   ultra8k:{key:"ultra8k",label:"🟪 Pixlemeta Ultra 8K (True)",type:"t2i",qualities:{"8k":{cost:30}},engines:{primary:"fal_flux_pro_8k",backup:null}},
   edit:{key:"edit",label:"✏️ Pixlemeta EDIT (FLUX.1 Kontext Pro)",type:"i2i",qualities:{"2k":{cost:15},"4k":{cost:25},"8k":{cost:45}},engines:{primary:"kontext_pro_edit",backup:null}},
+  seedream4:{key:"seedream4",label:"🌱 Seedream 4.0",type:"t2i",qualities:{"2k":{cost:6},"4k":{cost:12}},engines:{primary:"fal_seedream4",backup:null}},
+  fluxdev:{key:"fluxdev",label:"⚡ FLUX.1 [dev]",type:"t2i",qualities:{"2k":{cost:4}},engines:{primary:"fal_flux_dev",backup:null}},
+  gptimage2:{key:"gptimage2",label:"🧠 GPT Image 2",type:"t2i",qualities:{"2k":{cost:25},"4k":{cost:50}},engines:{primary:"fal_gpt_image2",backup:null}},
   nano2:{key:"nano2",label:"🍌 Nano Banana 2",type:"t2i",qualities:{"2k":{cost:8},"4k":{cost:16}},engines:{primary:"wavespeed_nano2",backup:null}},
-  nanop:{key:"nanop",label:"🍌 Nano Banana Pro",type:"t2i",qualities:{"2k":{cost:12},"4k":{cost:24}},engines:{primary:"wavespeed_nanopro",backup:null}},
-  gptimage2:{key:"gptimage2",label:"🧠 GPT Image 2",type:"t2i",qualities:{"2k":{cost:25},"4k":{cost:50}},engines:{primary:"coming_soon",backup:null}},
-  seedream4:{key:"seedream4",label:"🌱 Seedream 4.0",type:"t2i",qualities:{"2k":{cost:6},"4k":{cost:12}},engines:{primary:"coming_soon",backup:null}},
-  fluxdev:{key:"fluxdev",label:"⚡ FLUX.1 [dev]",type:"t2i",qualities:{"2k":{cost:4}},engines:{primary:"coming_soon",backup:null}}
+  nanop:{key:"nanop",label:"🍌 Nano Banana Pro",type:"t2i",qualities:{"2k":{cost:12},"4k":{cost:24}},engines:{primary:"wavespeed_nanopro",backup:null}}
 };
-const PLAN_ACCESS={trial:new Set(["cinematic","realism"]),promo:new Set(["cinematic","realism","edit","nano2","nanop"]),paid:new Set(Object.keys(MODELS)),admin:new Set(Object.keys(MODELS))};
-`;
-source=replaceBetween(source,"const MODELS = {","/* =========================\n   ASPECT RATIOS\n========================= */",models+"/* =========================\n   ASPECT RATIOS\n========================= */");
+const PLAN_ACCESS={trial:new Set(["cinematic","realism","seedream4","fluxdev"]),promo:new Set(["cinematic","realism","edit","seedream4","fluxdev","gptimage2"]),paid:new Set(Object.keys(MODELS)),admin:new Set(Object.keys(MODELS))};`;
+source=replaceBetween(source,"const MODELS = {","/* =========================\n   ASPECT RATIOS\n========================= */",models+"\n\n/* =========================\n   ASPECT RATIOS\n========================= */");
 
-source=source.replace(/shark_v1_edit/g,"kontext_pro_edit").replace(/sharkV1EditPipeline/g,"kontextProEditPipeline").replace(/fal-ai\/flux\/dev\/image-to-image/g,"fal-ai/flux-pro/kontext").replace(/\/shark/g,"/edit").replace(/cmdShark/g,"cmdEdit").replace(/SHARK V1/g,"PIXLEMETA EDIT").replace(/🦈/g,"✏️").replace(/shark/g,"edit");
-
-const marker="/* =========================\n   ENGINE ROUTER\n========================= */";
-if(!source.includes("wavespeedNano2Generate")){
- const extra=`/* =========================
-   WAVESPEED IMAGE ENGINES
+/* New FAL engines */
+const falExtras=`/* =========================
+   NEW FAL IMAGE ENGINES
 ========================= */
-async function wavespeedGenerate(endpoint,input,label){
-  const key=process.env.WAVESPEED_API_KEY||process.env.WAVESPEED_KEY;
-  if(!key) throw Error("WaveSpeed API key is not configured");
-  const r=await fetch("https://api.wavespeed.ai/api/v3/"+endpoint,{method:"POST",headers:{"Content-Type":"application/json","Authorization":"Bearer "+key},body:JSON.stringify(input)});
-  if(!r.ok) throw Error("WaveSpeed request failed: "+r.status);
-  const d=await r.json();
-  const id=d.id||d.prediction_id||d.data?.id;
-  if(d.outputs&&d.outputs[0]) return {url:d.outputs[0],type:"image"};
-  if(d.output&&typeof d.output==="string") return {url:d.output,type:"image"};
-  if(!id) throw Error(label+" returned no prediction id");
-  for(let i=0;i<90;i++){
-    await new Promise(x=>setTimeout(x,2000));
-    const q=await fetch("https://api.wavespeed.ai/api/v3/predictions/"+id,{headers:{"Authorization":"Bearer "+key}});
-    if(!q.ok) continue;
-    const z=await q.json();
-    const st=z.status||z.data?.status;
-    if(st==="completed"||st==="succeeded"||st==="success"){
-      const out=z.outputs||z.output||z.data?.outputs||z.data?.output;
-      const url=Array.isArray(out)?out[0]:out;
-      if(url) return {url,type:"image"};
-      throw Error(label+" completed without output");
-    }
-    if(st==="failed"||st==="error"||st==="cancelled") throw Error(label+" failed");
-  }
-  throw Error(label+" timed out");
+async function falSeedream4Generate(prompt,qualityKey,ratioKey){
+  const ratio=getRatio(ratioKey);
+  const data=await falRun("fal-ai/bytedance/seedream/v4/text-to-image",{prompt,image_size:{width:ratio.width,height:ratio.height},num_images:1});
+  const url=pickFirstImageUrl(data);
+  if(!url) throw new Error("Seedream 4.0 returned no image");
+  return {url,type:"image",ratio:ratio.label,approximate:false};
 }
-async function wavespeedNano2Generate(prompt,q,r){return wavespeedGenerate("google/nano-banana-2/text-to-image",{prompt,aspect_ratio:r,resolution:q==="4k"?"4K":"2K"},"Nano Banana 2");}
-async function wavespeedNanoProGenerate(prompt,q,r){return wavespeedGenerate("google/nano-banana-pro/text-to-image",{prompt,aspect_ratio:r,resolution:q==="4k"?"4K":"2K"},"Nano Banana Pro");}
+async function falFluxDevGenerate(prompt,qualityKey,ratioKey){
+  const data=await falRun("fal-ai/flux/dev",{prompt,num_images:1,output_format:"jpeg"});
+  const url=pickFirstImageUrl(data);
+  if(!url) throw new Error("FLUX.1 [dev] returned no image");
+  return {url,type:"image",ratio:getRatio(ratioKey).label};
+}
+async function falGPTImage2Generate(prompt,qualityKey,ratioKey){
+  const ratio=getRatio(ratioKey);
+  const quality=qualityKey==="4k"?"high":"medium";
+  const data=await falRun("openai/gpt-image-2",{prompt,image_size:{width:ratio.width,height:ratio.height},quality,n:1});
+  const url=pickFirstImageUrl(data);
+  if(!url) throw new Error("GPT Image 2 returned no image");
+  return {url,type:"image",ratio:ratio.label};
+}
 `;
- source=source.replace(marker,extra+marker);
+if(!source.includes("falSeedream4Generate")){
+  source=source.replace("/* =========================\n   ENGINE ROUTER\n========================= */",falExtras+"\n/* =========================\n   ENGINE ROUTER\n========================= */");
 }
-if(!source.includes('case "wavespeed_nano2"')) source=source.replace("  switch (engine) {","  switch (engine) {\n    case \"wavespeed_nano2\": return wavespeedNano2Generate(prompt,qualityKey,ratioKey);\n    case \"wavespeed_nanopro\": return wavespeedNanoProGenerate(prompt,qualityKey,ratioKey);\n    case \"coming_soon\": throw Error(\"This model is coming soon\");");
+
+/* Add router cases without touching existing engines */
+if(!source.includes('case "fal_seedream4"')){
+  source=source.replace("  switch (engine) {","  switch (engine) {\n    case \"fal_seedream4\": return falSeedream4Generate(prompt,qualityKey,ratioKey);\n    case \"fal_flux_dev\": return falFluxDevGenerate(prompt,qualityKey,ratioKey);\n    case \"fal_gpt_image2\": return falGPTImage2Generate(prompt,qualityKey,ratioKey);");
+}
+
+/* Studio UI */
+source=replaceFunction(source,"imageKeyboard",`function imageKeyboard() {
+  return {inline_keyboard:[
+    [{text:"🎬 Cinematic",callback_data:"m:cinematic"},{text:"📸 Realism",callback_data:"m:realism"}],
+    [{text:"🟪 Ultra 8K",callback_data:"m:ultra8k"},{text:"✏️ EDIT",callback_data:"m:edit"}],
+    [{text:"🌱 Seedream 4.0",callback_data:"m:seedream4"},{text:"⚡ FLUX.1 [dev]",callback_data:"m:fluxdev"}],
+    [{text:"🧠 GPT Image 2",callback_data:"m:gptimage2"}],
+    [{text:"🍌 Nano Banana 2 • SOON",callback_data:"soon:nano2"},{text:"🍌 Nano Banana Pro • SOON",callback_data:"soon:nanop"}],
+    [{text:"⬅️ Back",callback_data:"x:home"},{text:"❌ Cancel",callback_data:"x:cancel"}]
+  ]};
+}`);
+
+source=replaceFunction(source,"videoKeyboard",`function videoKeyboard() {
+  return {inline_keyboard:[
+    [{text:"⚡ Wan 2.2 • COMING SOON",callback_data:"v:soon:wan22"}],
+    [{text:"🎞️ LTX-2 • COMING SOON",callback_data:"v:soon:ltx2"}],
+    [{text:"🎥 Kling 3.0 • COMING SOON",callback_data:"v:soon:kling3"}],
+    [{text:"🌊 Wan 2.7 • COMING SOON",callback_data:"v:soon:wan27"}],
+    [{text:"🚀 Seedance 2.0 Fast • COMING SOON",callback_data:"v:soon:seedance20fast"}],
+    [{text:"🎬 Seedance 2.0 • COMING SOON",callback_data:"v:soon:seedance20"}],
+    [{text:"🔥 Seedance 2.5 • COMING SOON",callback_data:"v:soon:seedance25"}],
+    [{text:"✨ Gemini Omni 1.1 Flash • COMING SOON",callback_data:"v:soon:geminiomni"}],
+    [{text:"🎥 Veo 3.1 • COMING SOON",callback_data:"v:soon:veo31"}],
+    [{text:"⚡ Kling 3.0 Turbo Pro • COMING SOON",callback_data:"v:soon:kling3turbo"}],
+    [{text:"⚙️ Video Settings • COMING SOON",callback_data:"v:settings"}],
+    [{text:"⬅️ Back",callback_data:"x:home"}]
+  ]};
+}`);
+
+source=replaceFunction(source,"showVideoMenu",`async function showVideoMenu(chatId,userId) {
+  await clearFlow(userId);
+  return sendMessage(chatId,
+    "🎬 PIXELMETA VIDEO STUDIO\\n\\n"+
+    "Video models are being integrated next.\\n\\n"+
+    "Choose an upcoming engine to see its status.\\n\\n"+
+    "🎛️ Planned controls\\n"+
+    "• Quality: 480p / 580p / 720p / 1080p / 4K\\n"+
+    "• Duration: 5s / 8s / 10s / 15s\\n"+
+    "• FPS: 24 / 30\\n"+
+    "• Audio: On / Off\\n"+
+    "• Ratio: 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9\\n\\n"+
+    "🚧 No video credits are consumed until a model is actually connected.",
+    {reply_markup:videoKeyboard()});
+}`);
+
+source=replaceFunction(source,"cmdModels",`async function cmdModels(chatId,userId) {
+  const plan=await getPlan(userId);
+  const lines=[
+    "📚 PIXELMETA AI — MODEL STUDIO","",
+    "🖼️ IMAGE — LIVE TODAY (FAL)",
+    "🎬 Cinematic • 2K 2c / 4K 4c",
+    "📸 Realism • 2K 6c / 4K 15c",
+    "🟪 Ultra 8K • 8K 30c",
+    "✏️ EDIT • FLUX.1 Kontext Pro • 2K 15c / 4K 25c / 8K 45c",
+    "🌱 Seedream 4.0 • 2K 6c / 4K 12c",
+    "⚡ FLUX.1 [dev] • 2K 4c",
+    "🧠 GPT Image 2 • 2K 25c / 4K 50c",
+    "",
+    "🍌 IMAGE — WAVESPEED NEXT",
+    "Nano Banana 2 • Coming soon",
+    "Nano Banana Pro • Coming soon",
+    "",
+    "🎬 VIDEO — COMING SOON",
+    "Wan 2.2 • LTX-2 • Kling 3.0 • Wan 2.7",
+    "Seedance 2.0 Fast • Seedance 2.0 • Seedance 2.5",
+    "Gemini Omni 1.1 Flash • Veo 3.1 • Kling 3.0 Turbo Pro",
+    "",
+    `Your plan: ${plan.toUpperCase()}`
+  ];
+  return sendMessage(chatId,lines.join("\\n"),{reply_markup:homeKeyboard()});
+}`);
+
+/* Generic status for future models; never charges credits */
+const soonHandler=`
+  if (data.startsWith("soon:") || data.startsWith("v:soon:")) {
+    return sendMessage(chatId,"🚧 COMING SOON\\n\\nThis model is listed in the Studio but is not connected yet.\\n\\nNo credits were charged. We will activate it only after its provider integration is tested.");
+  }
+`;
+if(!source.includes('data.startsWith("soon:")')){
+  source=source.replace('  if (data.startsWith("m:")) {',soonHandler+'\n  if (data.startsWith("m:")) {');
+}
+
+/* New model callback safety: coming-soon engines cannot generate */
+if(!source.includes('engine === "coming_soon"')){
+  source=source.replace('  const primary =\n    model.engines.primary;','  const primary =\n    model.engines.primary;\n\n  if (primary === "coming_soon") {\n    throw new Error("This model is coming soon");\n  }');
+}
 
 fs.writeFileSync(indexPath,source,"utf8");
-console.log("Bootstrap: Pixlemeta EDIT + exact WaveSpeed Nano Banana routing applied");
+console.log("Bootstrap: FAL launch models + Image/Video Studio UI applied");
 require(indexPath);
