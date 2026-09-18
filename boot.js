@@ -8,10 +8,38 @@ function replaceBetween(s,start,end,replacement){
   if(a<0||b<0) throw new Error("Bootstrap marker missing: "+start);
   return s.slice(0,a)+replacement+s.slice(b);
 }
+
+/* Robust function replacement: finds the function body by balanced braces,
+   instead of depending on whitespace/next-function formatting. */
 function replaceFunction(s,name,replacement){
-  const re=new RegExp("function "+name+"\\s*\\([^]*?\\n}\\n\\n(?=function |/\\*)");
-  if(!re.test(s)) throw new Error("Bootstrap function missing: "+name);
-  return s.replace(re,replacement+"\n\n");
+  const head=new RegExp("function\\s+"+name+"\\s*\\(");
+  const m=head.exec(s);
+  if(!m) throw new Error("Bootstrap function missing: "+name);
+  const open=s.indexOf("{",m.index);
+  if(open<0) throw new Error("Bootstrap opening brace missing: "+name);
+  let depth=0,quote=null,esc=false,lineComment=false,blockComment=false;
+  for(let i=open;i<s.length;i++){
+    const c=s[i],n=s[i+1];
+    if(lineComment){ if(c==="\n") lineComment=false; continue; }
+    if(blockComment){ if(c==="*"&&n==="/"){blockComment=false;i++;} continue; }
+    if(quote){
+      if(esc){esc=false;continue;}
+      if(c==="\\"){esc=true;continue;}
+      if(c===quote) quote=null;
+      continue;
+    }
+    if(c==="/"&&n==="/"){lineComment=true;i++;continue;}
+    if(c==="/"&&n==="*"){blockComment=true;i++;continue;}
+    if(c==='"'||c==="'"||c==='`'){quote=c;continue;}
+    if(c==="{") depth++;
+    else if(c==="}"){
+      depth--;
+      if(depth===0){
+        return s.slice(0,m.index)+replacement+s.slice(i+1);
+      }
+    }
+  }
+  throw new Error("Bootstrap closing brace missing: "+name);
 }
 
 /* SHARK -> Pixlemeta EDIT / Kontext Pro */
@@ -25,11 +53,7 @@ source=source
   .replace(/🦈/g,"✏️")
   .replace(/shark/g,"edit");
 
-/* TODAY'S FAL MODEL REGISTRY
-   Existing working models stay intact.
-   New models activated today are FAL-only.
-   WaveSpeed models remain tomorrow's work.
-*/
+/* TODAY'S FAL MODEL REGISTRY */
 const models=`const MODELS = {
   cinematic:{key:"cinematic",label:"🎬 Pixlemeta Cinematic",type:"t2i",qualities:{"2k":{cost:2},"4k":{cost:4}},engines:{primary:"fal_schnell",backup:null}},
   realism:{key:"realism",label:"📸 Pixlemeta Realism (DSLR)",type:"t2i",qualities:{"2k":{cost:6},"4k":{cost:15}},engines:{primary:"fal_flux_ultra_realism",backup:"replicate_sdxl"}},
@@ -38,13 +62,13 @@ const models=`const MODELS = {
   seedream4:{key:"seedream4",label:"🌱 Seedream 4.0",type:"t2i",qualities:{"2k":{cost:6},"4k":{cost:12}},engines:{primary:"fal_seedream4",backup:null}},
   fluxdev:{key:"fluxdev",label:"⚡ FLUX.1 [dev]",type:"t2i",qualities:{"2k":{cost:4}},engines:{primary:"fal_flux_dev",backup:null}},
   gptimage2:{key:"gptimage2",label:"🧠 GPT Image 2",type:"t2i",qualities:{"2k":{cost:25},"4k":{cost:50}},engines:{primary:"fal_gpt_image2",backup:null}},
-  nano2:{key:"nano2",label:"🍌 Nano Banana 2",type:"t2i",qualities:{"2k":{cost:8},"4k":{cost:16}},engines:{primary:"wavespeed_nano2",backup:null}},
-  nanop:{key:"nanop",label:"🍌 Nano Banana Pro",type:"t2i",qualities:{"2k":{cost:12},"4k":{cost:24}},engines:{primary:"wavespeed_nanopro",backup:null}}
+  nano2:{key:"nano2",label:"🍌 Nano Banana 2",type:"t2i",qualities:{"2k":{cost:8},"4k":{cost:16}},engines:{primary:"coming_soon",backup:null}},
+  nanop:{key:"nanop",label:"🍌 Nano Banana Pro",type:"t2i",qualities:{"2k":{cost:12},"4k":{cost:24}},engines:{primary:"coming_soon",backup:null}}
 };
 const PLAN_ACCESS={trial:new Set(["cinematic","realism","seedream4","fluxdev"]),promo:new Set(["cinematic","realism","edit","seedream4","fluxdev","gptimage2"]),paid:new Set(Object.keys(MODELS)),admin:new Set(Object.keys(MODELS))};`;
 source=replaceBetween(source,"const MODELS = {","/* =========================\n   ASPECT RATIOS\n========================= */",models+"\n\n/* =========================\n   ASPECT RATIOS\n========================= */");
 
-/* New FAL engines */
+/* New FAL image engines */
 const falExtras=`/* =========================
    NEW FAL IMAGE ENGINES
 ========================= */
@@ -53,7 +77,7 @@ async function falSeedream4Generate(prompt,qualityKey,ratioKey){
   const data=await falRun("fal-ai/bytedance/seedream/v4/text-to-image",{prompt,image_size:{width:ratio.width,height:ratio.height},num_images:1});
   const url=pickFirstImageUrl(data);
   if(!url) throw new Error("Seedream 4.0 returned no image");
-  return {url,type:"image",ratio:ratio.label,approximate:false};
+  return {url,type:"image",ratio:ratio.label};
 }
 async function falFluxDevGenerate(prompt,qualityKey,ratioKey){
   const data=await falRun("fal-ai/flux/dev",{prompt,num_images:1,output_format:"jpeg"});
@@ -71,7 +95,8 @@ async function falGPTImage2Generate(prompt,qualityKey,ratioKey){
 }
 `;
 if(!source.includes("falSeedream4Generate")){
-  source=source.replace("/* =========================\n   ENGINE ROUTER\n========================= */",falExtras+"\n/* =========================\n   ENGINE ROUTER\n========================= */");
+  const marker="/* =========================\n   ENGINE ROUTER\n========================= */";
+  if(source.includes(marker)) source=source.replace(marker,falExtras+"\n"+marker);
 }
 
 /* Add router cases without touching existing engines */
@@ -152,20 +177,15 @@ source=replaceFunction(source,"cmdModels",`async function cmdModels(chatId,userI
 }`);
 
 /* Generic status for future models; never charges credits */
-const soonHandler=`
-  if (data.startsWith("soon:") || data.startsWith("v:soon:")) {
-    return sendMessage(chatId,"🚧 COMING SOON\\n\\nThis model is listed in the Studio but is not connected yet.\\n\\nNo credits were charged. We will activate it only after its provider integration is tested.");
-  }
-`;
 if(!source.includes('data.startsWith("soon:")')){
-  source=source.replace('  if (data.startsWith("m:")) {',soonHandler+'\n  if (data.startsWith("m:")) {');
+  source=source.replace('  if (data.startsWith("m:")) {','  if (data.startsWith("soon:") || data.startsWith("v:soon:")) {\n    return sendMessage(chatId,"🚧 COMING SOON\\n\\nThis model is listed in the Studio but is not connected yet.\\n\\nNo credits were charged.");\n  }\n\n  if (data.startsWith("m:")) {');
 }
 
-/* New model callback safety: coming-soon engines cannot generate */
+/* New model callback safety */
 if(!source.includes('engine === "coming_soon"')){
   source=source.replace('  const primary =\n    model.engines.primary;','  const primary =\n    model.engines.primary;\n\n  if (primary === "coming_soon") {\n    throw new Error("This model is coming soon");\n  }');
 }
 
 fs.writeFileSync(indexPath,source,"utf8");
-console.log("Bootstrap: FAL launch models + Image/Video Studio UI applied");
+console.log("Bootstrap: PIXLEMETA AI Studio update applied");
 require(indexPath);
