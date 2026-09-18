@@ -1,11 +1,8 @@
 FROM node:18
 
 WORKDIR /app
-
 COPY package*.json ./
 RUN npm install
-
 COPY . .
-
 EXPOSE 8080
-CMD ["node", "boot.js"]
+CMD ["node", "bootrunner.js"]
