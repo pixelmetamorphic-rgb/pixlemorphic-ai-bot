@@ -1,1 +1,1 @@
-Triggering temporary Kontext integration workflow.
+Triggering Kontext Pro integration patch — run 2.
