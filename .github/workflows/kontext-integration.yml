@@ -3,32 +3,26 @@ name: Kontext Integration Patch
 on:
   push:
     branches: [main]
-    paths:
-      - KONTEXT_TRIGGER.txt
 
 permissions:
   contents: write
 
 jobs:
   patch:
+    if: ${{ github.event.head_commit.message != 'feat: replace SHARK with Pixlemeta EDIT (Kontext Pro)' }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-
       - name: Patch index.js
-        shell: bash
         run: |
           python - <<'PY'
           from pathlib import Path
           import re
-
-          p = Path("index.js")
-          s = p.read_text(encoding="utf-8")
-
+          p = Path('index.js')
+          s = p.read_text(encoding='utf-8')
           if 'key: "edit"' in s and 'fal-ai/flux-pro/kontext' in s and 'command === "/edit"' in s:
-              print("Kontext Pro patch already present; nothing to do.")
+              print('Already patched')
               raise SystemExit(0)
-
           pattern = r'  shark: \{.*?\n  \}\n};'
           replacement = '''  edit: {
     key: "edit",
@@ -36,15 +30,9 @@ jobs:
       "✏️ Pixlemeta EDIT (Premium Edit)",
     type: "i2i",
     qualities: {
-      "2k": {
-        cost: 15
-      },
-      "4k": {
-        cost: 25
-      },
-      "8k": {
-        cost: 45
-      }
+      "2k": { cost: 15 },
+      "4k": { cost: 25 },
+      "8k": { cost: 45 }
     },
     engines: {
       primary: "kontext_pro_edit",
@@ -54,41 +42,28 @@ jobs:
 };'''
           s, n = re.subn(pattern, replacement, s, count=1, flags=re.S)
           if n != 1:
-              raise SystemExit("Could not replace SHARK model definition")
-
+              raise SystemExit('SHARK model block not found')
           s = s.replace('async function sharkV1EditPipeline(', 'async function kontextProEditPipeline(', 1)
-
-          old_call = '''      "fal-ai/flux/dev/image-to-image",
+          old = '''      "fal-ai/flux/dev/image-to-image",
       {
         image_url: imageUrl,
         prompt,
         strength: 0.75,
         num_images: 1
       }'''
-          new_call = '''      "fal-ai/flux-pro/kontext",
+          new = '''      "fal-ai/flux-pro/kontext",
       {
         image_url: imageUrl,
         prompt,
         num_images: 1,
         output_format: "jpeg"
       }'''
-          if old_call not in s:
-              raise SystemExit("Could not find old SHARK FAL call")
-          s = s.replace(old_call, new_call, 1)
+          if old not in s:
+              raise SystemExit('Old SHARK FAL call not found')
+          s = s.replace(old, new, 1)
           s = s.replace('"SHARK V1 returned no image"', '"Pixlemeta EDIT returned no image"', 1)
-
-          old_upscale = '''
-  if (qualityKey === "8k") {
-    url = await falTopazUpscale(
-      url,
-      4
-    );
-  }
-'''
-          s = s.replace(old_upscale, "\n", 1)
-
+          s = s.replace('''\n  if (qualityKey === "8k") {\n    url = await falTopazUpscale(\n      url,\n      4\n    );\n  }\n''', '\n', 1)
           s = s.replace('case "shark_v1_edit":\n      return sharkV1EditPipeline(', 'case "kontext_pro_edit":\n      return kontextProEditPipeline(', 1)
-
           s = s.replace('lower.includes(\n      "shark"\n    )', 'lower.includes(\n      "edit"\n    )')
           s = s.replace('modelKey =\n      "shark";', 'modelKey =\n      "edit";')
           s = s.replace('modelKey === "shark"', 'modelKey === "edit"')
@@ -105,10 +80,8 @@ jobs:
           s = s.replace('command === "/shark"', 'command === "/edit"')
           s = s.replace('return cmdShark(', 'return cmdEdit(')
           s = s.replace('"shark"', '"edit"')
-
-          p.write_text(s, encoding="utf-8")
+          p.write_text(s, encoding='utf-8')
           PY
-
       - name: Validate
         run: |
           node --check index.js
@@ -117,16 +90,11 @@ jobs:
           grep -q 'kontext_pro_edit' index.js
           grep -q 'command === "/edit"' index.js
           ! grep -q 'shark_v1_edit' index.js
-          ! grep -q 'command === "/shark"' index.js
-
       - name: Commit patch
         run: |
-          if git diff --quiet -- index.js; then
-            echo "No index.js changes needed."
-            exit 0
-          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add index.js
+          git diff --cached --quiet && exit 0
           git commit -m "feat: replace SHARK with Pixlemeta EDIT (Kontext Pro)"
           git push
