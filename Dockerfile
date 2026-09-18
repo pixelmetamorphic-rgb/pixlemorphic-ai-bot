@@ -8,4 +8,4 @@ RUN npm install
 COPY . .
 
 EXPOSE 8080
-CMD ["node", "boot.js"]
+CMD ["node", "bootfix.js"]
