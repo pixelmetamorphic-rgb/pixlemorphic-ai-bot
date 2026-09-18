@@ -3,12 +3,12 @@
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
-    "start": "node boot.js"
+    "start": "node index.js"
   },
   "dependencies": {
     "express": "^4.19.2",
-    "node-fetch": "^2.6.7",
-    "dotenv": "^16.4.5",
-    "ioredis": "^5.3.2"
+    "node-fetch": "2.6.7",
+    "dotenv": "16.4.5",
+    "ioredis": "5.3.2"
   }
 }
