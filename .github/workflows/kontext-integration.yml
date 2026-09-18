@@ -1,0 +1,77 @@
+name: Kontext Integration Patch
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  patch:
+    if: github.event.head_commit.message != 'feat: replace SHARK with Pixlemeta EDIT (Kontext Pro)'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Patch index.js
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          p = Path('index.js')
+          s = p.read_text()
+
+          replacements = [
+            ('shark: {\n    key: "shark",\n    label:\n      "🦈 Pixlemeta SHARK V1 (Premium Edit)",', 'edit: {\n    key: "edit",\n    label:\n      "✏️ Pixlemeta EDIT (Premium Edit)",'),
+            ('primary: "shark_v1_edit",', 'primary: "kontext_pro_edit",'),
+            ('lower.includes(\n      "shark"\n    )', 'lower.includes(\n      "edit"\n    )'),
+            ('modelKey =\n      "shark";', 'modelKey =\n      "edit";'),
+            ('async function sharkV1EditPipeline(', 'async function kontextProEditPipeline('),
+            ('"fal-ai/flux/dev/image-to-image",', '"fal-ai/flux-pro/kontext",'),
+            ('strength: 0.75,\n        num_images: 1', 'num_images: 1,\n        output_format: "jpeg"'),
+            ('"SHARK V1 returned no image"', '"Pixlemeta EDIT returned no image"'),
+            ('case "shark_v1_edit":\n      return sharkV1EditPipeline(', 'case "kontext_pro_edit":\n      return kontextProEditPipeline('),
+            ('"🦈 Pixlemeta SHARK V1",', '"✏️ Pixlemeta EDIT",'),
+            ('modelKey === "shark"', 'modelKey === "edit"'),
+            ('`🦈 SHARK V1 requires an image.', '`✏️ PIXLEMETA EDIT requires an image.'),
+            ('`/shark <edit instruction>`', '`/edit <edit instruction>`'),
+            ('async function cmdShark(', 'async function cmdEdit('),
+            ('/^\\/shark/i', '/^\\/edit/i'),
+            ('`🦈 SHARK V1\\n\\n`', '`✏️ PIXLEMETA EDIT\\n\\n`'),
+            ('`shark:${userId}:image`', '`edit:${userId}:image`'),
+            ('"shark",\n    "4k",', '"edit",\n    "4k",'),
+            ('/* =========================\n     PHOTO / SHARK\n  ========================= */', '/* =========================\n     PHOTO / EDIT\n  ========================= */'),
+            ('`📷 Image received.\\n\\n` +\n        `Now use:\\n` +\n        `/edit <edit instruction>`', '`📷 Image received.\\n\\n` +\n        `Now use:\\n` +\n        `/edit <edit instruction>`'),
+            ('command === "/shark"', 'command === "/edit"'),
+            ('return cmdShark(', 'return cmdEdit('),
+            ('`🦈 SHARK V1 — PREMIUM EDIT\\n\\n`', '`✏️ PIXLEMETA EDIT — PREMIUM EDIT\\n\\n`'),
+            ('/models`\n', '/models`\n')
+          ]
+
+          for old, new in replacements:
+              if old not in s:
+                  raise SystemExit(f'Missing expected source fragment: {old[:80]!r}')
+              s = s.replace(old, new)
+
+          # Ensure the renamed model key is used everywhere in model access sets.
+          s = s.replace('"shark"', '"edit"')
+
+          p.write_text(s)
+          PY
+
+      - name: Validate
+        run: |
+          node --check index.js
+          grep -q 'key: "edit"' index.js
+          grep -q 'fal-ai/flux-pro/kontext' index.js
+          grep -q 'kontext_pro_edit' index.js
+          ! grep -q 'shark_v1_edit' index.js
+          ! grep -q 'command === "/shark"' index.js
+
+      - name: Commit patch
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.js
+          git commit -m "feat: replace SHARK with Pixlemeta EDIT (Kontext Pro)"
+          git push
