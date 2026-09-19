@@ -165,6 +165,20 @@ const MODELS = {
     }
   },
 
+  seedream45: {
+    key: "seedream45",
+    label: "🌿 Seedream 4.5",
+    type: "t2i",
+    qualities: {
+      "2k": { cost: 8 },
+      "4k": { cost: 16 }
+    },
+    engines: {
+      primary: "fal_seedream45",
+      backup: null
+    }
+  },
+
   fluxdev: {
     key: "fluxdev",
     label: "⚡ FLUX.1 [dev]",
@@ -1358,6 +1372,13 @@ function inferModelQualityFromText(
   }
 
   if (
+    lower.includes("seedream 4.5") ||
+    lower.includes("seedream45") ||
+    lower.includes("seedream v4.5")
+  ) {
+    modelKey =
+      "seedream45";
+  } else if (
     lower.includes("seedream")
   ) {
     modelKey =
@@ -1382,7 +1403,9 @@ function inferModelQualityFromText(
   }
 
   if (
-    lower.includes("4k")
+    lower.includes("4k") &&
+    modelKey !==
+      "ultra8k"
   ) {
     qualityKey =
       "4k";
@@ -1416,6 +1439,14 @@ const IMAGE_SIZE_2K = {
   "34": { width: 1536, height: 2048 },
   "169": { width: 2048, height: 1152 },
   "916": { width: 1152, height: 2048 }
+};
+
+const SEEDREAM45_SIZE_2K = {
+  sq: { width: 2048, height: 2048 },
+  "45": { width: 2048, height: 2560 },
+  "34": { width: 1920, height: 2560 },
+  "169": { width: 2560, height: 1440 },
+  "916": { width: 1440, height: 2560 }
 };
 
 const IMAGE_SIZE_4K = {
@@ -1458,6 +1489,25 @@ function imageSizeFor(
   }
 
   return IMAGE_SIZE_2K[key];
+}
+
+function seedream45SizeFor(
+  ratioKey,
+  qualityKey
+) {
+  const key =
+    RATIOS[ratioKey]
+      ? ratioKey
+      : "sq";
+
+  if (
+    qualityKey ===
+    "4k"
+  ) {
+    return IMAGE_SIZE_4K[key];
+  }
+
+  return SEEDREAM45_SIZE_2K[key];
 }
 
 function safeErrorText(
@@ -1942,7 +1992,60 @@ async function falSeedream4Generate(
     ratio:
       getRatio(
         ratioKey
-      ).label
+      ).label,
+    providerModel:
+      "seedream-4.0"
+  };
+}
+
+async function falSeedream45Generate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const size =
+    seedream45SizeFor(
+      ratioKey,
+      qualityKey
+    );
+
+  const data =
+    await falRun(
+      "fal-ai/bytedance/seedream/v4.5/text-to-image",
+      {
+        prompt,
+        image_size:
+          size,
+        num_images:
+          1,
+        max_images:
+          1,
+        enable_safety_checker:
+          true
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(
+      data
+    );
+
+  if (!url) {
+    throw new Error(
+      "Seedream 4.5 returned no image"
+    );
+  }
+
+  return {
+    url,
+    type:
+      "image",
+    ratio:
+      getRatio(
+        ratioKey
+      ).label,
+    providerModel:
+      "seedream-4.5"
   };
 }
 
@@ -2091,6 +2194,13 @@ async function runEngine(
 
     case "fal_seedream4":
       return falSeedream4Generate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "fal_seedream45":
+      return falSeedream45Generate(
         prompt,
         qualityKey,
         ratioKey
@@ -2245,13 +2355,14 @@ function imageKeyboard() {
         { text: "🟪 Ultra 8K Realism ✅", callback_data: "m:ultra8k" }
       ],
       [
-        { text: "✏️ EDIT • Kontext Pro 🧪", callback_data: "m:edit" }
+        { text: "✏️ EDIT • Kontext Pro ✅", callback_data: "m:edit" }
       ],
       [
         { text: "🌱 Seedream 4.0 🧪", callback_data: "m:seedream4" },
-        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "m:fluxdev" }
+        { text: "🌿 Seedream 4.5 🧪", callback_data: "m:seedream45" }
       ],
       [
+        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "m:fluxdev" },
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       [
@@ -2526,10 +2637,11 @@ async function cmdModels(
     "🎬 Cinematic • 2K / 4K",
     "📸 Realism • 2K / 4K",
     "🟪 Ultra 8K Realism • 8K",
-    "",
-    "🧪 FAL INTEGRATED — ADMIN TESTING",
     "✏️ EDIT • FLUX.1 Kontext Pro",
+    "",
+    "🧪 FAL COST / QUALITY TEST",
     "🌱 Seedream 4.0 • 2K / 4K",
+    "🌿 Seedream 4.5 • 2K / 4K",
     "⚡ FLUX.1 [dev] • 2K",
     "🧠 GPT Image 2 • 2K / 4K",
     "",
@@ -4073,7 +4185,7 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "fal-image-stage-1b-delivery-fix",
+      release: "seedream-4-and-45-test",
       redis:
         redisStatus,
       fal:
