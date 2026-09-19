@@ -929,14 +929,163 @@ async function sendPhoto(
   photo,
   caption = ""
 ) {
-  return telegramRequest(
-    "sendPhoto",
-    {
-      chat_id: chatId,
-      photo,
-      caption
+  try {
+    return await telegramRequest(
+      "sendPhoto",
+      {
+        chat_id: chatId,
+        photo,
+        caption
+      }
+    );
+  } catch (directError) {
+    const isRemoteUrl =
+      typeof photo === "string" &&
+      (photo.startsWith("https://") ||
+        photo.startsWith("http://"));
+
+    if (!isRemoteUrl) {
+      throw directError;
     }
-  );
+
+    console.warn(
+      "Telegram URL photo delivery failed; using streamed upload fallback:",
+      directError.message
+    );
+
+    const remote = await fetch(
+      photo,
+      {
+        method: "GET",
+        redirect: "follow",
+        headers: {
+          "User-Agent": "PIXLEMORPHIC-AI/1.0"
+        }
+      }
+    );
+
+    if (!remote.ok) {
+      throw new Error(
+        "Result download failed: HTTP " + remote.status
+      );
+    }
+
+    const contentType =
+      remote.headers.get("content-type") ||
+      "image/jpeg";
+
+    const contentLength = Number(
+      remote.headers.get("content-length") || 0
+    );
+
+    const maxPhotoBytes =
+      9.5 * 1024 * 1024;
+
+    if (
+      contentLength > 0 &&
+      contentLength > maxPhotoBytes
+    ) {
+      console.warn(
+        "Result exceeds safe Telegram photo size; sending as document instead."
+      );
+
+      return sendDocument(
+        chatId,
+        photo,
+        caption
+      );
+    }
+
+    let extension = "jpg";
+
+    if (contentType.includes("png")) {
+      extension = "png";
+    } else if (
+      contentType.includes("webp")
+    ) {
+      extension = "webp";
+    }
+
+    const form = new FormData();
+
+    form.append(
+      "chat_id",
+      String(chatId)
+    );
+
+    if (caption) {
+      form.append(
+        "caption",
+        caption
+      );
+    }
+
+    const fileOptions = {
+      filename:
+        "pixlemeta-result." + extension,
+      contentType
+    };
+
+    if (contentLength > 0) {
+      fileOptions.knownLength =
+        contentLength;
+    }
+
+    form.append(
+      "photo",
+      remote.body,
+      fileOptions
+    );
+
+    try {
+      const uploadResponse =
+        await fetch(
+          "https://api.telegram.org/bot" + TG_TOKEN + "/sendPhoto",
+          {
+            method: "POST",
+            headers: form.getHeaders(),
+            body: form
+          }
+        );
+
+      const uploadText =
+        await uploadResponse.text();
+
+      let uploadData;
+
+      try {
+        uploadData =
+          JSON.parse(uploadText);
+      } catch {
+        uploadData = {
+          raw: uploadText
+        };
+      }
+
+      if (
+        !uploadResponse.ok ||
+        !uploadData?.ok
+      ) {
+        throw new Error(
+          "Telegram streamed photo upload failed: " +
+          JSON.stringify(uploadData)
+        );
+      }
+
+      return uploadData.result;
+    } catch (streamError) {
+      console.warn(
+        "Telegram streamed photo upload failed; sending as document fallback:",
+        streamError.message
+      );
+
+      return sendDocument(
+        chatId,
+        photo,
+        caption
+      );
+    }
+  }
 }
 
 async function sendDocument(
@@ -2375,7 +2524,7 @@ async function falGPTImage2Generate(
         num_images:
           1,
         output_format:
-          "png"
+          "jpeg"
       }
     );
 
