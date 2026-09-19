@@ -6,6 +6,7 @@ const express = require("express");
 const fetch = require("node-fetch");
 const FormData = require("form-data");
 const Redis = require("ioredis");
+const { randomUUID } = require("crypto");
 
 const app = express();
 app.use(express.json({ limit: "4mb" }));
@@ -20,6 +21,8 @@ const REPLICATE_API_TOKEN = process.env.REPLICATE_API_TOKEN;
 const FAL_API_KEY =
   process.env.FAL_API_KEY || process.env.FAL_KEY;
 const REDIS_URL = process.env.REDIS_URL;
+const RUNWARE_API_KEY = process.env.RUNWARE_API_KEY || "";
+const RUNWARE_TIMEOUT_MS = 360000;
 const TG_SECRET_TOKEN =
   process.env.TG_SECRET_TOKEN || "";
 const PORT = parseInt(
@@ -205,6 +208,40 @@ const MODELS = {
       primary: "fal_flux_dev",
       backup: null
     }
+  },
+
+  flux2klein9b: {
+    key: "flux2klein9b",
+    label: "FLUX.2 [klein] 9B",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_flux2klein9b", backup: null }
+  },
+  seedream50lite: {
+    key: "seedream50lite",
+    label: "Seedream 5.0 Lite",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "runware_seedream50lite", backup: null }
+  },
+  seedream50pro: {
+    key: "seedream50pro",
+    label: "Seedream 5.0 Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_seedream50pro", backup: null }
+  },
+  qwenimage30pro: {
+    key: "qwenimage30pro",
+    label: "Qwen-Image-3.0-Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_qwenimage30pro", backup: null }
   },
 
   gptimage2: {
@@ -711,6 +748,9 @@ async function canAccess(
   userId,
   modelKey
 ) {
+  if (MODELS[modelKey]?.adminOnly) {
+    return isAdmin(userId);
+  }
   const plan =
     await getPlan(userId);
 
@@ -757,7 +797,8 @@ async function rateLimit(
 ========================= */
 
 async function acquireBusy(
-  userId
+  userId,
+  ttl = BUSY_LOCK_SECONDS
 ) {
   if (!redis) {
     return true;
@@ -769,7 +810,7 @@ async function acquireBusy(
       "1",
       "NX",
       "EX",
-      BUSY_LOCK_SECONDS
+      ttl
     );
 
   return result === "OK";
@@ -2554,6 +2595,136 @@ async function falGPTImage2Generate(
    ENGINE ROUTER
 ========================= */
 
+// Backend-only IDs. Testing prices are deliberately unset (admin costs zero).
+const RUNWARE_MODELS = {
+  runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
+  runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
+  runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
+  runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" }
+};
+
+function runwareSizeFor(engine, qualityKey, ratioKey) {
+  if (engine === "runware_seedream50lite") {
+    const sizes = {
+      sq: { width: 2048, height: 2048 },
+      "34": { width: 1728, height: 2304 },
+      "169": { width: 2848, height: 1600 },
+      "916": { width: 1600, height: 2848 }
+    };
+    if (qualityKey !== "2k" || !sizes[ratioKey]) {
+      throw new Error("Unsupported image dimensions");
+    }
+    return sizes[ratioKey];
+  }
+  if (!["1k", "2k"].includes(qualityKey) || !RATIOS[ratioKey]) {
+    throw new Error("Unsupported image dimensions");
+  }
+  // Multiples of 16; exact ratios; within all three models' documented bounds.
+  const sizes = {
+    sq: { width: 1024, height: 1024 },
+    "45": { width: 896, height: 1120 },
+    "34": { width: 864, height: 1152 },
+    "169": { width: 1280, height: 720 },
+    "916": { width: 720, height: 1280 }
+  };
+  const size = sizes[ratioKey];
+  if (qualityKey === "1k") return { ...size };
+  // The FLUX model caps each side at 2048.
+  return { ...IMAGE_SIZE_2K[ratioKey] };
+}
+
+async function runwareRequest(task, timeoutMs) {
+  const response = await fetch("https://api.runware.ai/v1", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${RUNWARE_API_KEY}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify([task]),
+    timeout: Math.max(1, Math.min(30000, timeoutMs)),
+    size: 2 * 1024 * 1024
+  });
+  if (!response.ok) {
+    // Do not expose upstream response bodies, URLs, or credentials.
+    throw new Error(`Image service request failed (HTTP ${response.status})`);
+  }
+  return response.json();
+}
+
+async function runwareGenerate(engine, prompt, qualityKey, ratioKey) {
+  if (!RUNWARE_API_KEY) throw new Error("Image service is not configured");
+  const config = RUNWARE_MODELS[engine];
+  if (!config) throw new Error("Invalid image model");
+  const size = runwareSizeFor(engine, qualityKey, ratioKey);
+  const taskUUID = randomUUID();
+  const started = Date.now();
+  const deadline = started + RUNWARE_TIMEOUT_MS;
+  const task = {
+    taskType: "imageInference",
+    taskUUID,
+    model: config.model,
+    positivePrompt: prompt,
+    ...size,
+    numberResults: 1,
+    outputType: "URL",
+    outputFormat: "JPG",
+    includeCost: true,
+    deliveryMethod: "async"
+  };
+  if (config.steps) task.steps = config.steps;
+  const audit = {
+    provider: "runware", model: config.model, taskUUID,
+    quality: qualityKey, requestedWidth: size.width, requestedHeight: size.height
+  };
+  try {
+    // Submit once only: never create another billable job after an ambiguous failure.
+    let data = await runwareRequest(task, deadline - Date.now());
+    while (true) {
+      if (data?.errors?.length || data?.error) {
+        throw new Error("Image service could not complete this request");
+      }
+      const items = Array.isArray(data?.data) ? data.data : [];
+      const item = items.find((entry) => entry.taskUUID === taskUUID);
+      if (item?.status === "error" || item?.status === "failed") {
+        throw new Error("Image service could not complete this request");
+      }
+      if (item?.imageURL) {
+        const url = new URL(item.imageURL);
+        if (url.protocol !== "https:" || url.username || url.password) {
+          throw new Error("Invalid generated image URL");
+        }
+        const metrics = {
+          ...audit,
+          costUSD: typeof item.cost === "number" && Number.isFinite(item.cost)
+            ? item.cost : null,
+          generationMs: Date.now() - started,
+          generatedAt: new Date().toISOString()
+        };
+        console.log("image_generation_audit", JSON.stringify({
+          ...metrics, status: "generated"
+        }));
+        return { url: url.href, type: "image", ratio: getRatio(ratioKey).label, metrics };
+      }
+      if (!item || item.status === "success") {
+        throw new Error("Image service returned no usable result");
+      }
+      if (Date.now() + 3000 >= deadline) {
+        throw new Error("Image generation timed out");
+      }
+      await sleep(3000);
+      data = await runwareRequest({
+        taskType: "getResponse", taskUUID
+      }, deadline - Date.now());
+    }
+  } catch (error) {
+    console.error("image_generation_audit", JSON.stringify({
+      ...audit, status: "failed", generationMs: Date.now() - started
+    }));
+    // Generic outward error; internal audit retains correlation IDs, not secrets.
+    throw new Error("This image test could not complete. Please try again later.");
+  }
+}
+
 async function runEngine(
   engine,
   prompt,
@@ -2561,6 +2732,9 @@ async function runEngine(
   ratioKey,
   extra = {}
 ) {
+  if (Object.prototype.hasOwnProperty.call(RUNWARE_MODELS, engine)) {
+    return runwareGenerate(engine, prompt, qualityKey, ratioKey);
+  }
   switch (engine) {
     case "fal_schnell":
       return falSchnellGenerate(
@@ -2735,7 +2909,7 @@ function homeKeyboard() {
   };
 }
 
-function imageKeyboard() {
+function imageKeyboard(userId) {
   return {
     inline_keyboard: [
       [
@@ -2756,6 +2930,12 @@ function imageKeyboard() {
         { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "m:fluxdev" },
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
+      ...(isAdmin(userId) ? [
+        [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
+        [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
+        [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
+        [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }]
+      ] : []),
       [
         { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" },
         { text: "🍌 Nano Banana Pro • SOON", callback_data: "soon:nanop" }
@@ -2781,7 +2961,7 @@ function qualityKeyboard(
       (q) => ({
         text:
           `${q.toUpperCase()} • ` +
-          `${model.qualities[q].cost} credits`,
+          (model.adminOnly ? "Admin test" : `${model.qualities[q].cost} credits`),
         callback_data:
           `q:${modelKey}:${q}`
       })
@@ -2855,7 +3035,11 @@ function ratioKeyboard(
             "x:cancel"
         }
       ]
-    ]
+    ].map((row) => row.filter((button) => {
+      if (!button.callback_data.startsWith("r:")) return true;
+      const ratio = button.callback_data.split(":")[3];
+      return !MODELS[modelKey]?.ratios || MODELS[modelKey].ratios.includes(ratio);
+    })).filter((row) => row.length)
   };
 }
 
@@ -2955,10 +3139,10 @@ async function showImageMenu(
 
   return sendMessage(
     chatId,
-    "🖼 PIXELMETA IMAGE STUDIO\n\n✅ Core models live\n🧪 New FAL models integrated for admin testing\n\nChoose a model:",
+    "🖼 PIXELMETA IMAGE STUDIO\n\n✅ Core models live\n🧪 New models available for admin testing\n\nChoose a model:",
     {
       reply_markup:
-        imageKeyboard()
+        imageKeyboard(userId)
     }
   );
 }
@@ -3030,12 +3214,21 @@ async function cmdModels(
     "🟪 Ultra 8K Realism • 8K",
     "✏️ EDIT • FLUX.1 Kontext Pro",
     "",
-    "🧪 FAL COST / QUALITY TEST",
+    "🧪 MODEL TESTING",
     "🌱 Seedream 4.0 • 2K / 4K",
     "🌿 Seedream 4.5 • 2K / 4K",
     "⚡ FLUX.1 [dev] • 2K",
     "🧠 GPT Image 2 • 2K / 4K",
     "",
+    ...(isAdmin(userId) ? [
+      "🧪 PRIVATE ADMIN TESTS",
+      "FLUX.2 [klein] 9B • 1K / 2K",
+      "Seedream 5.0 Lite • 2K",
+      "Qwen-Image-3.0-Pro • 1K / 2K",
+      "Seedream 5.0 Pro • 1K / 2K",
+      "Admin tests use no bot credits.",
+      ""
+    ] : []),
     "⏳ UPCOMING",
     "🍌 Nano Banana 2",
     "🍌 Nano Banana Pro",
@@ -3097,6 +3290,12 @@ async function performGeneration(
     return;
   }
 
+  if (MODELS[modelKey]?.adminOnly &&
+      (!RATIOS[ratioKey] ||
+       (MODELS[modelKey].ratios && !MODELS[modelKey].ratios.includes(ratioKey)))) {
+    return sendMessage(chatId, "Please select a supported aspect ratio from the model menu.");
+  }
+
   const credits =
     await getCredits(userId);
 
@@ -3111,7 +3310,8 @@ async function performGeneration(
 
   if (
     !(await acquireBusy(
-      userId
+      userId,
+      MODELS[modelKey]?.adminOnly ? 600 : BUSY_LOCK_SECONDS
     ))
   ) {
     await sendMessage(
@@ -3128,6 +3328,9 @@ async function performGeneration(
   let charged =
     false;
 
+  let generationMetrics = null;
+  let slotHeartbeat = null;
+
   try {
     globalSlot =
       await acquireGlobalSlot();
@@ -3139,6 +3342,16 @@ async function performGeneration(
       );
 
       return;
+    }
+
+    if (MODELS[modelKey]?.adminOnly && redis) {
+      // Keep the existing global slot alive during long async image tests.
+      slotHeartbeat = setInterval(() => {
+        redis.expire("global:generation", 300).catch((error) => {
+          console.error("Generation slot refresh failed:", error.message);
+        });
+      }, 30000);
+      slotHeartbeat.unref();
     }
 
     const ratio =
@@ -3166,6 +3379,8 @@ async function performGeneration(
         ratioKey,
         extra
       );
+
+    generationMetrics = result?.metrics || null;
 
     if (!result?.url) {
       throw new Error(
@@ -3198,7 +3413,7 @@ async function performGeneration(
         qualityKey
       )}\n` +
       `Ratio: ${modelKey === "edit" ? "SOURCE" : ratio.label}\n` +
-      `⚡ Used: ${cost} credits`;
+      `⚡ Used: ${isAdmin(userId) ? 0 : cost} credits`;
 
     if (
       result.approximate &&
@@ -3223,7 +3438,17 @@ async function performGeneration(
         caption
       );
     }
+    if (generationMetrics) {
+      console.log("image_delivery_audit", JSON.stringify({
+        ...generationMetrics, status: "delivered"
+      }));
+    }
   } catch (error) {
+    if (generationMetrics) {
+      console.error("image_delivery_audit", JSON.stringify({
+        ...generationMetrics, status: "delivery_failed"
+      }));
+    }
     console.error(
       "Generation error:",
       error
@@ -3252,8 +3477,10 @@ async function performGeneration(
       await sendMessage(
         chatId,
         "❌ Generation failed.\n\n" +
-        safeErrorText(error) +
-        "\n\nYour credits were not charged, or were automatically returned."
+        "The image could not be completed or delivered. Please try again later." +
+        (charged
+          ? "\n\nYour credit refund could not be confirmed. Please contact support."
+          : "\n\nYour credits were not charged, or were automatically returned.")
       );
     } catch (
       telegramError
@@ -3264,6 +3491,7 @@ async function performGeneration(
       );
     }
   } finally {
+    if (slotHeartbeat) clearInterval(slotHeartbeat);
     if (globalSlot) {
       await releaseGlobalSlot();
     }
@@ -3738,7 +3966,8 @@ async function onCallback(
         modelKey,
         qualityKey
       ) ||
-      !RATIOS[ratioKey]
+      !RATIOS[ratioKey] ||
+      (MODELS[modelKey]?.ratios && !MODELS[modelKey].ratios.includes(ratioKey))
     ) {
       return;
     }
@@ -4576,7 +4805,7 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "seedream-4-and-45-test",
+      release: "image-admin-tests-v2",
       redis:
         redisStatus,
       fal:
