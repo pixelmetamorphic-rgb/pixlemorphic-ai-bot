@@ -48,6 +48,11 @@ const TG_MIN_GAP_MS = parseInt(
   10
 );
 
+const FAL_TIMEOUT_MS = parseInt(
+  process.env.FAL_TIMEOUT_MS || "120000",
+  10
+);
+
 /* =========================
    REDIS
 ========================= */
@@ -96,12 +101,8 @@ const MODELS = {
     label: "🎬 Pixlemeta Cinematic",
     type: "t2i",
     qualities: {
-      "2k": {
-        cost: 2
-      },
-      "4k": {
-        cost: 4
-      }
+      "2k": { cost: 2 },
+      "4k": { cost: 4 }
     },
     engines: {
       primary: "fal_schnell",
@@ -111,33 +112,24 @@ const MODELS = {
 
   realism: {
     key: "realism",
-    label:
-      "📸 Pixlemeta Realism (DSLR)",
+    label: "📸 Pixlemeta Realism (DSLR)",
     type: "t2i",
     qualities: {
-      "2k": {
-        cost: 6
-      },
-      "4k": {
-        cost: 15
-      }
+      "2k": { cost: 6 },
+      "4k": { cost: 15 }
     },
     engines: {
-      primary:
-        "fal_flux_ultra_realism",
+      primary: "fal_flux_ultra_realism",
       backup: "replicate_sdxl"
     }
   },
 
   ultra8k: {
     key: "ultra8k",
-    label:
-      "🟪 Pixlemeta Ultra 8K (True)",
+    label: "🟪 Pixlemeta Ultra 8K Realism",
     type: "t2i",
     qualities: {
-      "8k": {
-        cost: 30
-      }
+      "8k": { cost: 30 }
     },
     engines: {
       primary: "fal_flux_pro_8k",
@@ -145,24 +137,56 @@ const MODELS = {
     }
   },
 
-  shark: {
-    key: "shark",
-    label:
-      "🦈 Pixlemeta SHARK V1 (Premium Edit)",
+  edit: {
+    key: "edit",
+    label: "✏️ Pixlemeta EDIT (FLUX.1 Kontext Pro)",
     type: "i2i",
     qualities: {
-      "2k": {
-        cost: 15
-      },
-      "4k": {
-        cost: 25
-      },
-      "8k": {
-        cost: 45
-      }
+      "pro": { cost: 15 }
     },
     engines: {
-      primary: "shark_v1_edit",
+      primary: "kontext_pro_edit",
+      backup: null
+    }
+  },
+
+  seedream4: {
+    key: "seedream4",
+    label: "🌱 Seedream 4.0",
+    type: "t2i",
+    qualities: {
+      "2k": { cost: 6 },
+      "4k": { cost: 12 }
+    },
+    engines: {
+      primary: "fal_seedream4",
+      backup: null
+    }
+  },
+
+  fluxdev: {
+    key: "fluxdev",
+    label: "⚡ FLUX.1 [dev]",
+    type: "t2i",
+    qualities: {
+      "2k": { cost: 4 }
+    },
+    engines: {
+      primary: "fal_flux_dev",
+      backup: null
+    }
+  },
+
+  gptimage2: {
+    key: "gptimage2",
+    label: "🧠 GPT Image 2",
+    type: "t2i",
+    qualities: {
+      "2k": { cost: 25 },
+      "4k": { cost: 50 }
+    },
+    engines: {
+      primary: "fal_gpt_image2",
       backup: null
     }
   }
@@ -173,12 +197,16 @@ const PLAN_ACCESS = {
     "cinematic",
     "realism"
   ]),
-  promo: new Set(
-    Object.keys(MODELS)
-  ),
-  paid: new Set(
-    Object.keys(MODELS)
-  ),
+  promo: new Set([
+    "cinematic",
+    "realism",
+    "ultra8k"
+  ]),
+  paid: new Set([
+    "cinematic",
+    "realism",
+    "ultra8k"
+  ]),
   admin: new Set(
     Object.keys(MODELS)
   )
@@ -945,48 +973,70 @@ async function falRun(
     );
   }
 
-  const url =
-    `https://fal.run/${model}`;
+  const controller =
+    new AbortController();
 
-  const response =
-    await fetch(
-      url,
-      {
-        method: "POST",
-        headers: {
-          Authorization:
-            `Key ${FAL_API_KEY}`,
-          "Content-Type":
-            "application/json"
-        },
-        body: JSON.stringify(
-          input
-        )
-      }
+  const timeout =
+    setTimeout(
+      () => controller.abort(),
+      FAL_TIMEOUT_MS
     );
-
-  const text =
-    await response.text();
-
-  let data;
 
   try {
-    data =
-      JSON.parse(text);
-  } catch {
-    data = {
-      raw: text
-    };
-  }
+    const response =
+      await fetch(
+        `https://fal.run/${model}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization:
+              `Key ${FAL_API_KEY}`,
+            "Content-Type":
+              "application/json"
+          },
+          body:
+            JSON.stringify(input),
+          signal:
+            controller.signal
+        }
+      );
 
-  if (!response.ok) {
-    throw new Error(
-      `FAL ${response.status}: ` +
-      JSON.stringify(data)
-    );
-  }
+    const text =
+      await response.text();
 
-  return data;
+    let data;
+
+    try {
+      data =
+        JSON.parse(text);
+    } catch {
+      data = {
+        raw: text
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `FAL ${response.status}: ` +
+        JSON.stringify(data)
+      );
+    }
+
+    return data;
+  } catch (error) {
+    if (
+      error?.name ===
+      "AbortError"
+    ) {
+      throw new Error(
+        `FAL request timed out for ${model}`
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
 }
 
 function pickFirstImageUrl(
@@ -1121,27 +1171,17 @@ function inferModelQualityFromText(
     "2k";
 
   if (
-    lower.includes(
-      "realism"
-    ) ||
-    lower.includes(
-      "realistic"
-    ) ||
-    lower.includes(
-      "dslr"
-    )
+    lower.includes("realism") ||
+    lower.includes("realistic") ||
+    lower.includes("dslr")
   ) {
     modelKey =
       "realism";
   }
 
   if (
-    lower.includes(
-      "ultra 8k"
-    ) ||
-    lower.includes(
-      "8k"
-    )
+    lower.includes("ultra 8k") ||
+    lower.includes("8k")
   ) {
     modelKey =
       "ultra8k";
@@ -1150,18 +1190,31 @@ function inferModelQualityFromText(
   }
 
   if (
-    lower.includes(
-      "shark"
-    )
+    lower.includes("seedream")
   ) {
     modelKey =
-      "shark";
+      "seedream4";
   }
 
   if (
-    lower.includes(
-      "4k"
-    )
+    lower.includes("flux dev") ||
+    lower.includes("flux.1 dev")
+  ) {
+    modelKey =
+      "fluxdev";
+    qualityKey =
+      "2k";
+  }
+
+  if (
+    lower.includes("gpt image")
+  ) {
+    modelKey =
+      "gptimage2";
+  }
+
+  if (
+    lower.includes("4k")
   ) {
     qualityKey =
       "4k";
@@ -1171,6 +1224,89 @@ function inferModelQualityFromText(
     modelKey,
     qualityKey
   };
+}
+
+/* =========================
+   PREMIUM IMAGE HELPERS
+========================= */
+
+function buildUltraRealismPrompt(
+  prompt
+) {
+  const clean =
+    clampPrompt(prompt);
+
+  return (
+    clean +
+    ", authentic real-life photography, natural human skin texture with visible pores and fine detail, realistic anatomy and body proportions, true-to-life colors, physically natural lighting, realistic hair and fabric texture, subtle camera-like contrast, documentary-grade photorealism, no waxy skin, no plastic face, no CGI appearance, no artificial HDR, no oversaturated colors"
+  );
+}
+
+const IMAGE_SIZE_2K = {
+  sq: { width: 2048, height: 2048 },
+  "45": { width: 1600, height: 2000 },
+  "34": { width: 1536, height: 2048 },
+  "169": { width: 2048, height: 1152 },
+  "916": { width: 1152, height: 2048 }
+};
+
+const IMAGE_SIZE_4K = {
+  sq: { width: 4096, height: 4096 },
+  "45": { width: 3200, height: 4000 },
+  "34": { width: 3072, height: 4096 },
+  "169": { width: 4096, height: 2304 },
+  "916": { width: 2304, height: 4096 }
+};
+
+const GPT_IMAGE_4K_SIZE = {
+  sq: { width: 2880, height: 2880 },
+  "45": { width: 2560, height: 3200 },
+  "34": { width: 2304, height: 3072 },
+  "169": { width: 3840, height: 2160 },
+  "916": { width: 2160, height: 3840 }
+};
+
+function imageSizeFor(
+  ratioKey,
+  qualityKey,
+  family = "standard"
+) {
+  const key =
+    RATIOS[ratioKey]
+      ? ratioKey
+      : "sq";
+
+  if (
+    family === "gpt" &&
+    qualityKey === "4k"
+  ) {
+    return GPT_IMAGE_4K_SIZE[key];
+  }
+
+  if (
+    qualityKey === "4k"
+  ) {
+    return IMAGE_SIZE_4K[key];
+  }
+
+  return IMAGE_SIZE_2K[key];
+}
+
+function safeErrorText(
+  error
+) {
+  return String(
+    error?.message ||
+    "Unknown provider error"
+  )
+    .replace(
+      /Key\s+[A-Za-z0-9._-]+/g,
+      "Key [hidden]"
+    )
+    .slice(
+      0,
+      900
+    );
 }
 
 /* =========================
@@ -1289,33 +1425,81 @@ async function falFluxProGenerate8K(
     await falRun(
       FAL_FLUX_PRO_MODEL,
       {
-        prompt,
+        prompt:
+          buildUltraRealismPrompt(
+            prompt
+          ),
         aspect_ratio:
           ratio.ultraAspect,
-        num_images: 1,
+        raw:
+          true,
+        enhance_prompt:
+          false,
+        num_images:
+          1,
         output_format:
-          "png"
+          "png",
+        safety_tolerance:
+          "2"
       }
     );
 
-  const url =
+  const baseUrl =
     pickFirstImageUrl(
       data
     );
 
-  if (!url) {
+  if (!baseUrl) {
     throw new Error(
-      "FAL Flux Pro 8K returned no image"
+      "FAL Flux Pro Ultra returned no image"
+    );
+  }
+
+  const upscaleData =
+    await falRun(
+      "topaz/upscale/image/precision",
+      {
+        image_url:
+          baseUrl,
+        model:
+          "High Fidelity V3",
+        upscale_factor:
+          4,
+        output_format:
+          "png",
+        face_enhancement:
+          false,
+        sharpen:
+          0.1,
+        denoise:
+          0,
+        fix_compression:
+          0
+      }
+    );
+
+  const finalUrl =
+    pickFirstImageUrl(
+      upscaleData
+    );
+
+  if (!finalUrl) {
+    throw new Error(
+      "Ultra 8K precision upscale returned no image"
     );
   }
 
   return {
-    url,
-    type: "image",
+    url:
+      finalUrl,
+    type:
+      "image",
     ratio:
       ratio.label,
     approximate:
-      !ratio.exact
+      !ratio.exact,
+    ultraRealism:
+      true
   };
 }
 
@@ -1478,13 +1662,20 @@ async function replicateSDXLGenerate(
     "Replicate generation timed out"
   );
 }
-async function sharkV1EditPipeline(
+async function kontextProEditPipeline(
   imageUrl,
-  instruction,
-  qualityKey
+  instruction
 ) {
   const prompt =
-    clampPrompt(instruction);
+    clampPrompt(
+      instruction
+    );
+
+  if (!imageUrl) {
+    throw new Error(
+      "Source image is missing"
+    );
+  }
 
   if (!prompt) {
     throw new Error(
@@ -1494,33 +1685,204 @@ async function sharkV1EditPipeline(
 
   const data =
     await falRun(
-      "fal-ai/flux/dev/image-to-image",
-      {        image_url: imageUrl,
+      "fal-ai/flux-pro/kontext",
+      {
+        image_url:
+          imageUrl,
         prompt,
-        strength: 0.75,
-        num_images: 1
+        guidance_scale:
+          3.5,
+        num_images:
+          1,
+        output_format:
+          "jpeg",
+        safety_tolerance:
+          "2",
+        enhance_prompt:
+          false
       }
     );
 
-  let url =
-    pickFirstImageUrl(data);
+  const url =
+    pickFirstImageUrl(
+      data
+    );
 
   if (!url) {
     throw new Error(
-      "SHARK V1 returned no image"
-    );
-  }
-
-  if (qualityKey === "8k") {
-    url = await falTopazUpscale(
-      url,
-      4
+      "FLUX.1 Kontext Pro returned no image"
     );
   }
 
   return {
     url,
-    type: "image"
+    type:
+      "image"
+  };
+}
+
+/* =========================
+   NEW FAL IMAGE ENGINES
+========================= */
+
+async function falSeedream4Generate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const size =
+    imageSizeFor(
+      ratioKey,
+      qualityKey
+    );
+
+  const data =
+    await falRun(
+      "fal-ai/bytedance/seedream/v4/text-to-image",
+      {
+        prompt,
+        image_size:
+          size,
+        num_images:
+          1,
+        max_images:
+          1,
+        enable_safety_checker:
+          true,
+        enhance_prompt_mode:
+          "standard"
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(
+      data
+    );
+
+  if (!url) {
+    throw new Error(
+      "Seedream 4.0 returned no image"
+    );
+  }
+
+  return {
+    url,
+    type:
+      "image",
+    ratio:
+      getRatio(
+        ratioKey
+      ).label
+  };
+}
+
+async function falFluxDevGenerate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const size =
+    imageSizeFor(
+      ratioKey,
+      "2k"
+    );
+
+  const data =
+    await falRun(
+      "fal-ai/flux/dev",
+      {
+        prompt,
+        image_size:
+          size,
+        num_inference_steps:
+          28,
+        guidance_scale:
+          3.5,
+        num_images:
+          1,
+        enable_safety_checker:
+          true,
+        output_format:
+          "jpeg",
+        acceleration:
+          "none"
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(
+      data
+    );
+
+  if (!url) {
+    throw new Error(
+      "FLUX.1 [dev] returned no image"
+    );
+  }
+
+  return {
+    url,
+    type:
+      "image",
+    ratio:
+      getRatio(
+        ratioKey
+      ).label
+  };
+}
+
+async function falGPTImage2Generate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const size =
+    imageSizeFor(
+      ratioKey,
+      qualityKey,
+      "gpt"
+    );
+
+  const data =
+    await falRun(
+      "openai/gpt-image-2",
+      {
+        prompt,
+        image_size:
+          size,
+        background:
+          "auto",
+        quality:
+          qualityKey ===
+          "4k"
+            ? "high"
+            : "medium",
+        num_images:
+          1,
+        output_format:
+          "png"
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(
+      data
+    );
+
+  if (!url) {
+    throw new Error(
+      "GPT Image 2 returned no image"
+    );
+  }
+
+  return {
+    url,
+    type:
+      "image",
+    ratio:
+      getRatio(
+        ratioKey
+      ).label
   };
 }
 
@@ -1557,6 +1919,33 @@ async function runEngine(
         ratioKey
       );
 
+    case "fal_seedream4":
+      return falSeedream4Generate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "fal_flux_dev":
+      return falFluxDevGenerate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "fal_gpt_image2":
+      return falGPTImage2Generate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "kontext_pro_edit":
+      return kontextProEditPipeline(
+        extra.imageUrl,
+        prompt
+      );
+
     case "replicate_sdxl": {
       const url =
         await replicateSDXLGenerate(
@@ -1565,18 +1954,14 @@ async function runEngine(
 
       return {
         url,
-        type: "image",
+        type:
+          "image",
         ratio:
-          getRatio(ratioKey).label
+          getRatio(
+            ratioKey
+          ).label
       };
     }
-
-    case "shark_v1_edit":
-      return sharkV1EditPipeline(
-        extra.imageUrl,
-        prompt,
-        qualityKey
-      );
 
     default:
       throw new Error(
@@ -1687,15 +2072,17 @@ function imageKeyboard() {
         { text: "📸 Realism ✅", callback_data: "m:realism" }
       ],
       [
-        { text: "🟪 Ultra 8K ✅", callback_data: "m:ultra8k" },
-        { text: "✏️ EDIT 🧪", callback_data: "soon:edit" }
+        { text: "🟪 Ultra 8K Realism ✅", callback_data: "m:ultra8k" }
       ],
       [
-        { text: "🌱 Seedream 4.0 🧪", callback_data: "soon:seedream4" },
-        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "soon:fluxdev" }
+        { text: "✏️ EDIT • Kontext Pro 🧪", callback_data: "m:edit" }
       ],
       [
-        { text: "🧠 GPT Image 2 🧪", callback_data: "soon:gptimage2" }
+        { text: "🌱 Seedream 4.0 🧪", callback_data: "m:seedream4" },
+        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "m:fluxdev" }
+      ],
+      [
+        { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       [
         { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" },
@@ -1886,17 +2273,21 @@ async function showImageMenu(
   chatId,
   userId
 ) {
-  await setFlow(userId, { step: "choose_model" });
+  await setFlow(
+    userId,
+    {
+      step:
+        "choose_model"
+    }
+  );
 
   return sendMessage(
     chatId,
-    `🖼 PIXELMETA IMAGE STUDIO
-
-✅ Live models are ready to generate.
-🧪 New FAL models are being connected for today's test.
-
-Choose a model:`,
-    { reply_markup: imageKeyboard() }
+    "🖼 PIXELMETA IMAGE STUDIO\n\n✅ Core models live\n🧪 New FAL models integrated for admin testing\n\nChoose a model:",
+    {
+      reply_markup:
+        imageKeyboard()
+    }
   );
 }
 
@@ -1953,21 +2344,24 @@ async function cmdModels(
   chatId,
   userId
 ) {
-  const plan = await getPlan(userId);
+  const plan =
+    await getPlan(
+      userId
+    );
 
   const lines = [
     "📚 PIXELMETA MODEL CATALOG",
     "",
-    "✅ LIVE IMAGE",
+    "✅ LIVE",
     "🎬 Cinematic • 2K / 4K",
     "📸 Realism • 2K / 4K",
-    "🟪 Ultra 8K • 8K",
+    "🟪 Ultra 8K Realism • 8K",
     "",
-    "🧪 IMAGE — NEXT TEST",
+    "🧪 FAL INTEGRATED — ADMIN TESTING",
     "✏️ EDIT • FLUX.1 Kontext Pro",
-    "🌱 Seedream 4.0",
-    "⚡ FLUX.1 [dev]",
-    "🧠 GPT Image 2",
+    "🌱 Seedream 4.0 • 2K / 4K",
+    "⚡ FLUX.1 [dev] • 2K",
+    "🧠 GPT Image 2 • 2K / 4K",
     "",
     "⏳ UPCOMING",
     "🍌 Nano Banana 2",
@@ -1984,7 +2378,10 @@ async function cmdModels(
   return sendMessage(
     chatId,
     lines.join("\n"),
-    { reply_markup: homeKeyboard() }
+    {
+      reply_markup:
+        homeKeyboard()
+    }
   );
 }
 
@@ -2033,12 +2430,7 @@ async function performGeneration(
   if (credits < cost) {
     await sendMessage(
       chatId,
-      `❌ Not enough credits.
-
-` +
-      `Required: ${cost}
-` +
-      `Available: ${credits}`
+      `❌ Not enough credits.\n\nRequired: ${cost}\nAvailable: ${credits}`
     );
 
     return;
@@ -2060,6 +2452,9 @@ async function performGeneration(
   let globalSlot =
     false;
 
+  let charged =
+    false;
+
   try {
     globalSlot =
       await acquireGlobalSlot();
@@ -2074,24 +2469,20 @@ async function performGeneration(
     }
 
     const ratio =
-      getRatio(ratioKey);
+      getRatio(
+        ratioKey
+      );
 
     await sendMessage(
       chatId,
-      `🎨 GENERATING...
-
-` +
-      `${modelLabel(modelKey)}
-` +
+      `🎨 GENERATING...\n\n` +
+      `${modelLabel(modelKey)}\n` +
       `Quality: ${qualityLabel(
         modelKey,
         qualityKey
-      )}
-` +
-      `Ratio: ${ratio.label}
-
-` +
-      `Please wait...`
+      )}\n` +
+      `Ratio: ${modelKey === "edit" ? "SOURCE" : ratio.label}\n\n` +
+      "Please wait..."
     );
 
     const result =
@@ -2121,18 +2512,19 @@ async function performGeneration(
       );
     }
 
-    let caption =
-      `✨ PIXELMETA AI
+    charged =
+      !isAdmin(
+        userId
+      );
 
-` +
-      `${modelLabel(modelKey)}
-` +
+    let caption =
+      `✨ PIXELMETA AI\n\n` +
+      `${modelLabel(modelKey)}\n` +
       `Quality: ${qualityLabel(
         modelKey,
         qualityKey
-      )}
-` +      `Ratio: ${ratio.label}
-` +
+      )}\n` +
+      `Ratio: ${modelKey === "edit" ? "SOURCE" : ratio.label}\n` +
       `⚡ Used: ${cost} credits`;
 
     if (
@@ -2140,9 +2532,7 @@ async function performGeneration(
       ratioKey === "45"
     ) {
       caption +=
-        `
-
-ℹ️ 4:5 uses the closest native base ratio on this engine.`;
+        "\n\nℹ️ 4:5 uses the closest native base ratio on this engine.";
     }
 
     if (
@@ -2166,16 +2556,31 @@ async function performGeneration(
       error
     );
 
+    if (
+      charged
+    ) {
+      try {
+        await addCredits(
+          userId,
+          cost
+        );
+
+        charged =
+          false;
+      } catch (refundError) {
+        console.error(
+          "Automatic credit refund failed:",
+          refundError
+        );
+      }
+    }
+
     try {
       await sendMessage(
         chatId,
-        `❌ Generation failed.
-
-` +
-        `${error.message || "Unknown error"}
-
-` +
-        `Your credits were not charged for this failed generation.`
+        "❌ Generation failed.\n\n" +
+        safeErrorText(error) +
+        "\n\nYour credits were not charged, or were automatically returned."
       );
     } catch (
       telegramError
@@ -2220,23 +2625,8 @@ async function quickGen(
   if (
     modelKey === "ultra8k"
   ) {
-    qualityKey = "8k";
-  }
-
-  if (
-    modelKey === "shark"
-  ) {
-    await sendMessage(
-      chatId,
-      `🦈 SHARK V1 requires an image.
-
-` +
-      `Send a photo and use:
-` +
-      `/shark <edit instruction>`
-    );
-
-    return;
+    qualityKey =
+      "8k";
   }
 
   if (
@@ -2263,52 +2653,76 @@ async function quickGen(
   );
 }
 
-async function cmdShark(
+async function cmdEdit(
   chatId,
   userId,
   text
 ) {
+  if (
+    !(await canAccess(
+      userId,
+      "edit"
+    ))
+  ) {
+    return sendMessage(
+      chatId,
+      "🔒 Pixlemeta EDIT is currently in admin testing."
+    );
+  }
+
   const instruction =
     text
       .replace(
-        /^\/shark/i,
+        /^\/edit/i,
         ""
       )
       .trim();
 
-  if (!instruction) {
-    await sendMessage(
-      chatId,
-      `🦈 SHARK V1
-
-` +
-      `Send a photo first, then use:
-` +
-      `/shark <edit instruction>`
-    );
-
-    return;
-  }
-
   const imageUrl =
     await rGet(
-      `shark:${userId}:image`
+      `edit:${userId}:image`
     );
 
   if (!imageUrl) {
-    await sendMessage(
-      chatId,
-      "📷 Please send an image first."
+    await setFlow(
+      userId,
+      {
+        step:
+          "await_edit_image"
+      }
     );
 
-    return;
+    return sendMessage(
+      chatId,
+      "✏️ PIXLEMETA EDIT\n\nSend the image you want to edit."
+    );
   }
+
+  if (!instruction) {
+    await setFlow(
+      userId,
+      {
+        step:
+          "await_edit_prompt",
+        imageUrl
+      }
+    );
+
+    return sendMessage(
+      chatId,
+      "✍️ Image ready. Send your edit instruction."
+    );
+  }
+
+  await clearFlow(
+    userId
+  );
 
   return performGeneration(
     chatId,
     userId,
-    "shark",
-    "4k",
+    "edit",
+    "pro",
     "sq",
     instruction,
     {
@@ -2445,9 +2859,7 @@ async function onCallback(
 
       return sendMessage(
         chatId,
-        `⚙️ CHOOSE QUALITY
-
-` +
+        `⚙️ CHOOSE QUALITY\n\n` +
         `${modelLabel(
           flow.modelKey
         )}`,
@@ -2499,46 +2911,24 @@ async function onCallback(
     ) {
       return sendMessage(
         chatId,
-        "🔒 This model is locked on your current plan."
+        "🔒 This model is currently in admin testing and is not available on your plan yet."
       );
     }
 
     if (
-      modelKey === "shark"
+      modelKey === "edit"
     ) {
-      await clearFlow(
-        userId
+      await setFlow(
+        userId,
+        {
+          step:
+            "await_edit_image"
+        }
       );
 
       return sendMessage(
         chatId,
-        `🦈 SHARK V1 — PREMIUM EDIT
-
-` +
-        `Send a photo, then use:
-
-` +
-        `/shark <edit instruction>`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [
-                {
-                  text:
-                    "⬅️ Back",
-                  callback_data:
-                    "x:back_models"
-                },
-                {
-                  text:
-                    "❌ Cancel",
-                  callback_data:
-                    "x:cancel"
-                }
-              ]
-            ]
-          }
-        }
+        "✏️ PIXLEMETA EDIT — FLUX.1 KONTEXT PRO\n\nSend one image. After upload, send the edit instruction.\n\nNo generation starts until the instruction is received."
       );
     }
 
@@ -2553,9 +2943,7 @@ async function onCallback(
 
     return sendMessage(
       chatId,
-      `⚙️ CHOOSE QUALITY
-
-` +
+      `⚙️ CHOOSE QUALITY\n\n` +
       `${modelLabel(
         modelKey
       )}`,
@@ -2620,12 +3008,7 @@ async function onCallback(
     ) {
       return sendMessage(
         chatId,
-        `❌ Not enough credits.
-
-` +
-        `Required: ${cost}
-` +
-        `Available: ${credits}`
+        `❌ Not enough credits.\n\nRequired: ${cost}\nAvailable: ${credits}`
       );
     }
 
@@ -2641,12 +3024,10 @@ async function onCallback(
 
     return sendMessage(
       chatId,
-      `📐 CHOOSE ASPECT RATIO
-` +
+      `📐 CHOOSE ASPECT RATIO\n\n` +
       `${modelLabel(
         modelKey
-      )}
-` +
+      )}\n` +
       `Quality: ${qualityLabel(
         modelKey,
         qualityKey
@@ -2721,36 +3102,28 @@ async function onCallback(
 
     if (
       ratioKey === "45" &&
-      modelKey !==
-        "cinematic"
+      (
+        modelKey === "realism" ||
+        modelKey === "ultra8k"
+      )
     ) {
       note =
-        `
-
-ℹ️ This engine uses its closest native base ratio for 4:5.`;
+        "\n\nℹ️ This engine uses the closest native base ratio for 4:5.";
     }
 
     return sendMessage(
       chatId,
-      `✍️ SEND YOUR PROMPT
-
-` +
+      `✍️ SEND YOUR PROMPT\n\n` +
       `${modelLabel(
         modelKey
-      )}
-` +
+      )}\n` +
       `Quality: ${qualityLabel(
         modelKey,
         qualityKey
-      )}
-` +
+      )}\n` +
       `Ratio: ${ratio.label}` +
       note +
-      `
-
-Example:
-` +
-      `A cinematic portrait, dramatic lighting, ultra detailed`
+      "\n\nExample:\nA realistic portrait in natural daylight, authentic skin texture"
     );
   }
 }
@@ -2780,11 +3153,22 @@ async function onMessage(message) {
 
   await ensureUser(userId);
 
-  /* =========================
-     PHOTO / SHARK
-  ========================= */
+  const currentFlow =
+    await getFlow(
+      userId
+    );
 
   if (message.photo?.length) {
+    if (
+      currentFlow?.step !==
+      "await_edit_image"
+    ) {
+      return sendMessage(
+        chatId,
+        "📷 Image received.\n\nTo edit it, open IMAGE STUDIO → EDIT, then send the image again."
+      );
+    }
+
     try {
       const photo =
         message.photo[
@@ -2797,20 +3181,28 @@ async function onMessage(message) {
         );
 
       await rSet(
-        `shark:${userId}:image`,
+        `edit:${userId}:image`,
         url,
         1800
       );
 
+      await setFlow(
+        userId,
+        {
+          step:
+            "await_edit_prompt",
+          imageUrl:
+            url
+        }
+      );
+
       return sendMessage(
         chatId,
-        `📷 Image received.\n\n` +
-        `Now use:\n` +
-        `/shark <edit instruction>`
+        "✅ Image ready for EDIT.\n\nNow send your edit instruction.\n\nExample: Change the background to a premium studio while keeping the person unchanged."
       );
     } catch (error) {
       console.error(
-        "Photo handling error:",
+        "EDIT photo handling error:",
         error
       );
 
@@ -2849,10 +3241,6 @@ async function onMessage(message) {
       .slice(1)
       .join(" ")
       .trim();
-
-  /* =========================
-     BASIC COMMANDS
-  ========================= */
 
   if (
     command === "/start"
@@ -2942,18 +3330,23 @@ async function onMessage(message) {
   }
 
   if (
-    command === "/shark"
+    command === "/edit"
   ) {
-    return cmdShark(
+    return cmdEdit(
       chatId,
       userId,
       text
     );
   }
 
-  /* =========================
-     ADMIN
-  ========================= */
+  if (
+    command === "/shark"
+  ) {
+    return sendMessage(
+      chatId,
+      "ℹ️ SHARK V1 has been retired. Use /edit or IMAGE STUDIO → EDIT."
+    );
+  }
 
   if (
     isAdmin(userId) &&
@@ -2966,12 +3359,55 @@ async function onMessage(message) {
     );
   }
 
-  /* =========================
-     ACTIVE GENERATION FLOW
-  ========================= */
-
   const flow =
-    await getFlow(userId);
+    await getFlow(
+      userId
+    );
+
+  if (
+    flow?.step ===
+    "await_edit_prompt"
+  ) {
+    const instruction =
+      clampPrompt(text);
+
+    const imageUrl =
+      flow.imageUrl ||
+      await rGet(
+        `edit:${userId}:image`
+      );
+
+    if (!imageUrl) {
+      await setFlow(
+        userId,
+        {
+          step:
+            "await_edit_image"
+        }
+      );
+
+      return sendMessage(
+        chatId,
+        "📷 Source image expired. Please send the image again."
+      );
+    }
+
+    await clearFlow(
+      userId
+    );
+
+    return performGeneration(
+      chatId,
+      userId,
+      "edit",
+      "pro",
+      "sq",
+      instruction,
+      {
+        imageUrl
+      }
+    );
+  }
 
   if (
     flow?.step ===
@@ -3003,8 +3439,7 @@ async function onMessage(message) {
 
   return sendMessage(
     chatId,
-    `Use /gen to start.\n\n` +
-    `Or choose an option below:`,
+    "Use /gen to start.\n\nOr choose an option below:",
     {
       reply_markup:
         homeKeyboard()
@@ -3468,6 +3903,7 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
+      release: "fal-image-stage-1",
       redis:
         redisStatus,
       fal:
