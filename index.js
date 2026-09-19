@@ -54,6 +54,21 @@ const FAL_TIMEOUT_MS = parseInt(
   10
 );
 
+const FAL_QUEUE_TIMEOUT_MS = parseInt(
+  process.env.FAL_QUEUE_TIMEOUT_MS || "360000",
+  10
+);
+
+const FAL_QUEUE_POLL_MS = parseInt(
+  process.env.FAL_QUEUE_POLL_MS || "3000",
+  10
+);
+
+const FAL_QUEUE_HTTP_TIMEOUT_MS = parseInt(
+  process.env.FAL_QUEUE_HTTP_TIMEOUT_MS || "30000",
+  10
+);
+
 /* =========================
    REDIS
 ========================= */
@@ -1221,6 +1236,233 @@ async function falRun(
   }
 }
 
+function sleep(ms) {
+  return new Promise(
+    (resolve) => setTimeout(resolve, ms)
+  );
+}
+
+async function falQueueJson(
+  url,
+  {
+    method = "GET",
+    body,
+    timeoutMs =
+      FAL_QUEUE_HTTP_TIMEOUT_MS
+  } = {}
+) {
+  if (!FAL_API_KEY) {
+    throw new Error(
+      "FAL_API_KEY is not configured"
+    );
+  }
+
+  const controller =
+    new AbortController();
+
+  const timeout =
+    setTimeout(
+      () => controller.abort(),
+      timeoutMs
+    );
+
+  try {
+    const response =
+      await fetch(
+        url,
+        {
+          method,
+          headers: {
+            Authorization:
+              `Key ${FAL_API_KEY}`,
+            ...(body ===
+            undefined
+              ? {}
+              : {
+                  "Content-Type":
+                    "application/json"
+                })
+          },
+          ...(body === undefined
+            ? {}
+            : {
+                body:
+                  JSON.stringify(
+                    body
+                  )
+              }),
+          signal:
+            controller.signal
+        }
+      );
+
+    const text =
+      await response.text();
+
+    let data;
+
+    try {
+      data =
+        JSON.parse(text);
+    } catch {
+      data = {
+        raw: text
+      };
+    }
+
+    if (!response.ok) {
+      throw new Error(
+        `FAL queue ${response.status}: ` +
+          JSON.stringify(data)
+      );
+    }
+
+    return data;
+  } catch (error) {
+    if (
+      error?.name ===
+      "AbortError"
+    ) {
+      throw new Error(
+        "FAL queue HTTP request timed out"
+      );
+    }
+
+    throw error;
+  } finally {
+    clearTimeout(timeout);
+  }
+}
+
+async function falQueueRun(
+  model,
+  input,
+  {
+    timeoutMs =
+      FAL_QUEUE_TIMEOUT_MS,
+    pollMs =
+      FAL_QUEUE_POLL_MS
+  } = {}
+) {
+  const submitUrl =
+    `https://queue.fal.run/${model}`;
+
+  const submitted =
+    await falQueueJson(
+      submitUrl,
+      {
+        method: "POST",
+        body: input
+      }
+    );
+
+  const requestId =
+    submitted?.request_id;
+
+  if (!requestId) {
+    throw new Error(
+      `FAL queue returned no request_id for ${model}`
+    );
+  }
+
+  const statusUrl =
+    submitted?.status_url ||
+    `${submitUrl}/requests/${requestId}/status`;
+
+  const responseUrl =
+    submitted?.response_url ||
+    `${submitUrl}/requests/${requestId}`;
+
+  const cancelUrl =
+    submitted?.cancel_url ||
+    `${submitUrl}/requests/${requestId}/cancel`;
+
+  const startedAt =
+    Date.now();
+
+  while (
+    Date.now() -
+      startedAt <
+    timeoutMs
+  ) {
+    const status =
+      await falQueueJson(
+        statusUrl
+      );
+
+    const state =
+      String(
+        status?.status || ""
+      ).toUpperCase();
+
+    if (
+      state ===
+      "COMPLETED"
+    ) {
+      const result =
+        await falQueueJson(
+          responseUrl
+        );
+
+      if (
+        result?.response &&
+        typeof result.response ===
+          "object"
+      ) {
+        return result.response;
+      }
+
+      if (
+        result?.data &&
+        typeof result.data ===
+          "object"
+      ) {
+        return result.data;
+      }
+
+      return result;
+    }
+
+    if (
+      state === "FAILED" ||
+      state === "CANCELED" ||
+      state === "CANCELLED"
+    ) {
+      throw new Error(
+        `FAL queue ${state.toLowerCase()} for ${model}: ` +
+          JSON.stringify(
+            status?.error ||
+              status?.detail ||
+              status
+          )
+      );
+    }
+
+    await sleep(pollMs);
+  }
+
+  try {
+    await falQueueJson(
+      cancelUrl,
+      {
+        method: "PUT"
+      }
+    );
+  } catch (cancelError) {
+    console.error(
+      "FAL queue cancel failed:",
+      cancelError?.message ||
+        cancelError
+    );
+  }
+
+  throw new Error(
+    `FAL queue timed out for ${model} after ${Math.round(
+      timeoutMs / 1000
+    )}s`
+  );
+}
+
 function pickFirstImageUrl(
   data
 ) {
@@ -2117,7 +2359,7 @@ async function falGPTImage2Generate(
     );
 
   const data =
-    await falRun(
+    await falQueueRun(
       "openai/gpt-image-2",
       {
         prompt,
