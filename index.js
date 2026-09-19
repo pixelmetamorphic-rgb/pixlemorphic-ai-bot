@@ -4,6 +4,7 @@ require("dotenv").config();
 
 const express = require("express");
 const fetch = require("node-fetch");
+const FormData = require("form-data");
 const Redis = require("ioredis");
 
 const app = express();
@@ -914,14 +915,181 @@ async function sendDocument(
   document,
   caption = ""
 ) {
-  return telegramRequest(
-    "sendDocument",
-    {
-      chat_id: chatId,
-      document,
-      caption
+  try {
+    return await telegramRequest(
+      "sendDocument",
+      {
+        chat_id:
+          chatId,
+        document,
+        caption
+      }
+    );
+  } catch (directError) {
+    if (
+      typeof document !==
+        "string" ||
+      !/^https?:\/\//i.test(
+        document
+      )
+    ) {
+      throw directError;
     }
-  );
+
+    console.warn(
+      "Telegram URL document delivery failed; using streamed upload fallback:",
+      directError.message
+    );
+
+    const remote =
+      await fetch(
+        document,
+        {
+          method:
+            "GET",
+          redirect:
+            "follow",
+          headers: {
+            "User-Agent":
+              "PIXLEMORPHIC-AI/1.0"
+          }
+        }
+      );
+
+    if (!remote.ok) {
+      throw new Error(
+        `Result download failed: HTTP ${remote.status}`
+      );
+    }
+
+    const contentType =
+      remote.headers.get(
+        "content-type"
+      ) ||
+      "application/octet-stream";
+
+    const contentLength =
+      Number(
+        remote.headers.get(
+          "content-length"
+        ) ||
+        0
+      );
+
+    const maxUploadBytes =
+      49 * 1024 * 1024;
+
+    if (
+      contentLength > 0 &&
+      contentLength >
+        maxUploadBytes
+    ) {
+      throw new Error(
+        `8K result is too large for Telegram upload (${Math.ceil(
+          contentLength /
+          1024 /
+          1024
+        )} MB). Please retry; the bot now uses compressed 8K JPEG output.`
+      );
+    }
+
+    let extension =
+      "jpg";
+
+    if (
+      contentType.includes(
+        "png"
+      )
+    ) {
+      extension =
+        "png";
+    } else if (
+      contentType.includes(
+        "webp"
+      )
+    ) {
+      extension =
+        "webp";
+    }
+
+    const form =
+      new FormData();
+
+    form.append(
+      "chat_id",
+      String(chatId)
+    );
+
+    if (caption) {
+      form.append(
+        "caption",
+        caption
+      );
+    }
+
+    const fileOptions = {
+      filename:
+        `pixlemeta-ultra8k.${extension}`,
+      contentType
+    };
+
+    if (
+      contentLength > 0
+    ) {
+      fileOptions.knownLength =
+        contentLength;
+    }
+
+    form.append(
+      "document",
+      remote.body,
+      fileOptions
+    );
+
+    const uploadResponse =
+      await fetch(
+        `https://api.telegram.org/bot${TG_TOKEN}/sendDocument`,
+        {
+          method:
+            "POST",
+          headers:
+            form.getHeaders(),
+          body:
+            form
+        }
+      );
+
+    const uploadText =
+      await uploadResponse.text();
+
+    let uploadData;
+
+    try {
+      uploadData =
+        JSON.parse(
+          uploadText
+        );
+    } catch {
+      uploadData = {
+        raw:
+          uploadText
+      };
+    }
+
+    if (
+      !uploadResponse.ok ||
+      !uploadData?.ok
+    ) {
+      throw new Error(
+        "Telegram streamed document upload failed: " +
+        JSON.stringify(
+          uploadData
+        )
+      );
+    }
+
+    return uploadData.result;
+  }
 }
 
 async function answerCallbackQuery(
@@ -1438,7 +1606,7 @@ async function falFluxProGenerate8K(
         num_images:
           1,
         output_format:
-          "png",
+          "jpeg",
         safety_tolerance:
           "2"
       }
@@ -1466,15 +1634,17 @@ async function falFluxProGenerate8K(
         upscale_factor:
           4,
         output_format:
-          "png",
-        face_enhancement:
-          false,
-        sharpen:
-          0.1,
-        denoise:
+          "jpeg",
+        compression:
           0,
-        fix_compression:
-          0
+        noise:
+          0,
+        halo:
+          0,
+        grain:
+          0.01,
+        recover_detail:
+          0.95
       }
     );
 
@@ -3903,7 +4073,7 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "fal-image-stage-1",
+      release: "fal-image-stage-1b-delivery-fix",
       redis:
         redisStatus,
       fal:
