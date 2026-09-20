@@ -253,7 +253,7 @@ const MODELS = {
       "2k": { cost: 0 },
       "4k": { cost: 0 }
     },
-    engines: { primary: "fal_nano_banana_pro", backup: null }
+    engines: { primary: "nano_banana_pro", backup: null }
   },
   ideogramv3: {
     key: "ideogramv3",
@@ -2455,7 +2455,7 @@ async function falIdeogramV3Generate(
       {
         prompt,
         image_size: ideogramImageSizeFor(ratioKey),
-        rendering_speed: "BALANCED",
+        rendering_speed: "TURBO",
         style: "AUTO",
         expand_prompt: true,
         num_images: 1
@@ -2702,7 +2702,8 @@ const RUNWARE_MODELS = {
   runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
   runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
-  runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" }
+  runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" },
+  runware_nano_banana_pro: { model: "google:4@2" }
 };
 
 function runwareSizeFor(engine, qualityKey, ratioKey) {
@@ -2896,6 +2897,24 @@ async function runEngine(
 
     case "fal_ideogram_v3":
       return falIdeogramV3Generate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "nano_banana_pro":
+      // Runware is currently cheaper for the observed standard output.
+      // FAL documents 4K support and pricing, so reserve it for 4K until
+      // Runware's 4K price has been confirmed by an actual request.
+      if (qualityKey === "4k") {
+        return falNanoBananaProGenerate(
+          prompt,
+          qualityKey,
+          ratioKey
+        );
+      }
+      return runwareGenerate(
+        "runware_nano_banana_pro",
         prompt,
         qualityKey,
         ratioKey
