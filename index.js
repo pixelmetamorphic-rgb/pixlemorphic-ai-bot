@@ -261,7 +261,9 @@ const MODELS = {
     type: "i2i",
     adminOnly: true,
     qualities: { "2k": { cost: 0 } },
-    engines: { primary: "nano_banana_pro", backup: null }
+    // Runware's current google:4@2 route rejects image input. Keep its
+    // cheaper text-to-image route, but send edits to Nano Banana Pro on FAL.
+    engines: { primary: "fal_nano_banana_pro_edit", backup: null }
   },
   ideogramv3: {
     key: "ideogramv3",
@@ -2420,19 +2422,22 @@ async function kontextProEditPipeline(
 async function falNanoBananaProGenerate(
   prompt,
   qualityKey,
-  ratioKey
+  ratioKey,
+  imageUrl = null
 ) {
+  const input = {
+    prompt,
+    aspect_ratio: getRatio(ratioKey).label,
+    resolution: qualityKey.toUpperCase(),
+    num_images: 1,
+    output_format: "png",
+    limit_generations: true
+  };
+  if (imageUrl) input.image_urls = [imageUrl];
   const data =
     await falQueueRun(
       "fal-ai/nano-banana-pro",
-      {
-        prompt,
-        aspect_ratio: getRatio(ratioKey).label,
-        resolution: qualityKey.toUpperCase(),
-        num_images: 1,
-        output_format: "png",
-        limit_generations: true
-      }
+      input
     );
 
   const url =
@@ -2902,6 +2907,17 @@ async function runEngine(
         prompt,
         qualityKey,
         ratioKey
+      );
+
+    case "fal_nano_banana_pro_edit":
+      if (!extra.imageUrl) {
+        throw new Error("An image is required for editing");
+      }
+      return falNanoBananaProGenerate(
+        prompt,
+        qualityKey,
+        ratioKey,
+        extra.imageUrl
       );
 
     case "fal_ideogram_v3":
