@@ -243,6 +243,27 @@ const MODELS = {
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_qwenimage30pro", backup: null }
   },
+  nanobananapro: {
+    key: "nanobananapro",
+    label: "Nano Banana Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: {
+      "1k": { cost: 0 },
+      "2k": { cost: 0 },
+      "4k": { cost: 0 }
+    },
+    engines: { primary: "fal_nano_banana_pro", backup: null }
+  },
+  ideogramv3: {
+    key: "ideogramv3",
+    label: "Ideogram V3",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "fal_ideogram_v3", backup: null }
+  },
 
   gptimage2: {
     key: "gptimage2",
@@ -1942,6 +1963,17 @@ function seedream45SizeFor(
   return SEEDREAM45_SIZE_2K[key];
 }
 
+function ideogramImageSizeFor(ratioKey) {
+  const sizes = {
+    sq: "square_hd",
+    "34": "portrait_4_3",
+    "169": "landscape_16_9",
+    "916": "portrait_16_9"
+  };
+
+  return sizes[ratioKey] || "square_hd";
+}
+
 function safeErrorText(
   error
 ) {
@@ -2377,6 +2409,76 @@ async function kontextProEditPipeline(
    NEW FAL IMAGE ENGINES
 ========================= */
 
+async function falNanoBananaProGenerate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const data =
+    await falQueueRun(
+      "fal-ai/nano-banana-pro",
+      {
+        prompt,
+        aspect_ratio: getRatio(ratioKey).label,
+        resolution: qualityKey.toUpperCase(),
+        num_images: 1,
+        output_format: "png",
+        limit_generations: true
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(data);
+
+  if (!url) {
+    throw new Error(
+      "Nano Banana Pro returned no image"
+    );
+  }
+
+  return {
+    url,
+    type: "image",
+    ratio: getRatio(ratioKey).label,
+    providerModel: "nano-banana-pro"
+  };
+}
+
+async function falIdeogramV3Generate(
+  prompt,
+  qualityKey,
+  ratioKey
+) {
+  const data =
+    await falQueueRun(
+      "fal-ai/ideogram/v3",
+      {
+        prompt,
+        image_size: ideogramImageSizeFor(ratioKey),
+        rendering_speed: "BALANCED",
+        style: "AUTO",
+        expand_prompt: true,
+        num_images: 1
+      }
+    );
+
+  const url =
+    pickFirstImageUrl(data);
+
+  if (!url) {
+    throw new Error(
+      "Ideogram V3 returned no image"
+    );
+  }
+
+  return {
+    url,
+    type: "image",
+    ratio: getRatio(ratioKey).label,
+    providerModel: "ideogram-v3"
+  };
+}
+
 async function falSeedream4Generate(
   prompt,
   qualityKey,
@@ -2785,6 +2887,20 @@ async function runEngine(
         ratioKey
       );
 
+    case "fal_nano_banana_pro":
+      return falNanoBananaProGenerate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
+    case "fal_ideogram_v3":
+      return falIdeogramV3Generate(
+        prompt,
+        qualityKey,
+        ratioKey
+      );
+
     case "kontext_pro_edit":
       return kontextProEditPipeline(
         extra.imageUrl,
@@ -2934,11 +3050,12 @@ function imageKeyboard(userId) {
         [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
-        [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }]
+        [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }],
+        [{ text: "🧪 Nano Banana Pro", callback_data: "m:nanobananapro" }],
+        [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }]
       ] : []),
       [
-        { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" },
-        { text: "🍌 Nano Banana Pro • SOON", callback_data: "soon:nanop" }
+        { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" }
       ],
       [
         { text: "⬅️ Back", callback_data: "x:home" },
