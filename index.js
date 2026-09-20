@@ -255,6 +255,14 @@ const MODELS = {
     },
     engines: { primary: "nano_banana_pro", backup: null }
   },
+  nanobananaproedit: {
+    key: "nanobananaproedit",
+    label: "Nano Banana Pro Edit",
+    type: "i2i",
+    adminOnly: true,
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "nano_banana_pro", backup: null }
+  },
   ideogramv3: {
     key: "ideogramv3",
     label: "Ideogram V3",
@@ -2754,7 +2762,7 @@ async function runwareRequest(task, timeoutMs) {
   return response.json();
 }
 
-async function runwareGenerate(engine, prompt, qualityKey, ratioKey) {
+async function runwareGenerate(engine, prompt, qualityKey, ratioKey, extra = {}) {
   if (!RUNWARE_API_KEY) throw new Error("Image service is not configured");
   const config = RUNWARE_MODELS[engine];
   if (!config) throw new Error("Invalid image model");
@@ -2775,6 +2783,7 @@ async function runwareGenerate(engine, prompt, qualityKey, ratioKey) {
     deliveryMethod: "async"
   };
   if (config.steps) task.steps = config.steps;
+  if (extra.imageUrl) task.seedImage = extra.imageUrl;
   const audit = {
     provider: "runware", model: config.model, taskUUID,
     quality: qualityKey, requestedWidth: size.width, requestedHeight: size.height
@@ -2836,7 +2845,7 @@ async function runEngine(
   extra = {}
 ) {
   if (Object.prototype.hasOwnProperty.call(RUNWARE_MODELS, engine)) {
-    return runwareGenerate(engine, prompt, qualityKey, ratioKey);
+    return runwareGenerate(engine, prompt, qualityKey, ratioKey, extra);
   }
   switch (engine) {
     case "fal_schnell":
@@ -2917,7 +2926,8 @@ async function runEngine(
         "runware_nano_banana_pro",
         prompt,
         qualityKey,
-        ratioKey
+        ratioKey,
+        extra
       );
 
     case "kontext_pro_edit":
@@ -3071,6 +3081,7 @@ function imageKeyboard(userId) {
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
         [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }],
         [{ text: "🧪 Nano Banana Pro", callback_data: "m:nanobananapro" }],
+        [{ text: "🧪 EDIT • Nano Banana Pro", callback_data: "m:nanobananaproedit" }],
         [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }]
       ] : []),
       [
@@ -3952,20 +3963,18 @@ async function onCallback(
       );
     }
 
-    if (
-      modelKey === "edit"
-    ) {
+    if (MODELS[modelKey]?.type === "i2i") {
       await setFlow(
         userId,
         {
-          step:
-            "await_edit_image"
+          step: "await_edit_image",
+          modelKey
         }
       );
 
       return sendMessage(
         chatId,
-        "✏️ PIXLEMETA EDIT — FLUX.1 KONTEXT PRO\n\nSend one image. After upload, send the edit instruction.\n\nNo generation starts until the instruction is received."
+        `✏️ ${modelLabel(modelKey)}\n\nSend one image. After upload, send the edit instruction.\n\nNo generation starts until the instruction is received.`
       );
     }
 
@@ -4229,8 +4238,8 @@ async function onMessage(message) {
         {
           step:
             "await_edit_prompt",
-          imageUrl:
-            url
+          imageUrl: url,
+          modelKey: currentFlow.modelKey || "edit"
         }
       );
 
@@ -4437,8 +4446,8 @@ async function onMessage(message) {
     return performGeneration(
       chatId,
       userId,
-      "edit",
-      "pro",
+      flow.modelKey || "edit",
+      flow.modelKey === "nanobananaproedit" ? "2k" : "pro",
       "sq",
       instruction,
       {
