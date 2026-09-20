@@ -2436,7 +2436,9 @@ async function falNanoBananaProGenerate(
   if (imageUrl) input.image_urls = [imageUrl];
   const data =
     await falQueueRun(
-      "fal-ai/nano-banana-pro",
+      imageUrl
+        ? "fal-ai/nano-banana-pro/edit"
+        : "fal-ai/nano-banana-pro",
       input
     );
 
