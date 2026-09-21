@@ -45,6 +45,7 @@ function boot(fetchHandler, env = {}) {
     del: async k => testValues.delete(k),
     incr: async k => { const n=Number(testValues.get(k)||0)+1; testValues.set(k,n); return n; },
     decr: async k => { const n=Number(testValues.get(k)||0)-1; testValues.set(k,n); return n; },
+    incrby: async (k,amount) => { const n=Number(testValues.get(k)||0)+amount; testValues.set(k,n); return n; },
     expire: async () => 1,
     eval: async (_s,_n,k,cost) => {
       const n=Number(testValues.get(k)||0);
@@ -269,13 +270,13 @@ test("existing customer credit behavior survives: success deducts, provider fail
   h.values.set("u:123:plan", "trial"); h.values.set("u:123:credits", 100);
   h.run('sendMessage = async () => {}; sendPhoto = async () => {}; generateWithModel = async () => ({url:"https://images.example/x"})');
   await h.run('performGeneration(123,123,"gptimage2","2k","sq","a landscape")');
-  assert.equal(h.values.get("u:123:credits"), 75);
+  assert.equal(h.values.get("u:123:credits"), 70);
   h.run('sendPhoto = async () => { throw new Error("delivery failed"); }');
   await h.run('performGeneration(123,123,"gptimage2","2k","sq","a landscape")');
-  assert.equal(h.values.get("u:123:credits"), 75);
+  assert.equal(h.values.get("u:123:credits"), 70);
   h.run('generateWithModel = async () => { throw new Error("generation failed"); }');
   await h.run('performGeneration(123,123,"gptimage2","2k","sq","a landscape")');
-  assert.equal(h.values.get("u:123:credits"), 75);
+  assert.equal(h.values.get("u:123:credits"), 70);
 });
 
 test("existing Telegram fallback downloads image then uploads it, and large images become documents", async () => {
@@ -358,4 +359,30 @@ test("Nano 2 edit menu retains selected resolution and ratio through photo and p
   assert.equal(calls[0][2],"nanobanana2edit");
   assert.equal(calls[0][3],"4k"); assert.equal(calls[0][4],"169");
   assert.ok(calls[0][6].imageUrl.endsWith("photos/input.jpg"));
+});
+
+test("every image tier has positive customer rates and premium 8K costs most", () => {
+  const h=boot(success);
+  const rates=h.run('Object.values(MODELS).flatMap(m=>Object.values(m.qualities).map(q=>q.cost))');
+  assert.ok(rates.every(n=>Number.isSafeInteger(n)&&n>0));
+  assert.equal(h.run('getCost("nano8kmaster","8k")'),Math.max(...rates));
+  for(const quality of ['1k','2k','4k']) assert.equal(h.run(`getCost("nanobanana2","${quality}")`),h.run(`getCost("nanobanana2edit","${quality}")`));
+});
+
+test("reserve before provider call, stop if reservation fails, refund without overwriting top-up", async () => {
+  const h=boot(success);
+  h.values.set('u:123:plan','trial'); h.values.set('u:123:credits',100);
+  h.context.checkReserved=()=>{
+    assert.equal(h.values.get('u:123:credits'),70);
+    h.values.set('u:123:credits',120); // Concurrent +50 top-up
+    throw new Error('Provider failed');
+  };
+  h.run('sendMessage=async()=>{}; generateWithModel=checkReserved');
+  await h.run('performGeneration(123,123,"gptimage2","2k","sq","cat")');
+  assert.equal(h.values.get('u:123:credits'),150);
+  h.run('deductCredits=async()=>false; generateWithModel=async()=>{throw new Error("MUST NOT RUN")};');
+  const before=h.logs.length;
+  await h.run('performGeneration(123,123,"gptimage2","2k","sq","cat")');
+  assert.ok(!h.logs.slice(before).flat().some(v=>String(v).includes('MUST NOT RUN')));
+  assert.equal(h.values.get('u:123:credits'),150);
 });
