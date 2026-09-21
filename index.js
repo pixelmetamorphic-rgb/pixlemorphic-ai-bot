@@ -169,34 +169,6 @@ const MODELS = {
     }
   },
 
-  seedream4: {
-    key: "seedream4",
-    label: "🌱 Seedream 4.0",
-    type: "t2i",
-    qualities: {
-      "2k": { cost: 6 },
-      "4k": { cost: 12 }
-    },
-    engines: {
-      primary: "fal_seedream4",
-      backup: null
-    }
-  },
-
-  seedream45: {
-    key: "seedream45",
-    label: "🌿 Seedream 4.5",
-    type: "t2i",
-    qualities: {
-      "2k": { cost: 8 },
-      "4k": { cost: 16 }
-    },
-    engines: {
-      primary: "fal_seedream45",
-      backup: null
-    }
-  },
-
 
   gptimage2: {
     key: "gptimage2",
@@ -1757,19 +1729,6 @@ function inferModelQualityFromText(
       "8k";
   }
 
-  if (
-    lower.includes("seedream 4.5") ||
-    lower.includes("seedream45") ||
-    lower.includes("seedream v4.5")
-  ) {
-    modelKey =
-      "seedream45";
-  } else if (
-    lower.includes("seedream")
-  ) {
-    modelKey =
-      "seedream4";
-  }
 
 
   if (
@@ -3001,10 +2960,6 @@ function imageKeyboard(userId) {
         { text: "✏️ EDIT • Kontext Pro ✅", callback_data: "m:edit" }
       ],
       [
-        { text: "🌱 Seedream 4.0 🧪", callback_data: "m:seedream4" },
-        { text: "🌿 Seedream 4.5 🧪", callback_data: "m:seedream45" }
-      ],
-      [
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       ...(isAdmin(userId) ? [
@@ -3295,8 +3250,6 @@ async function cmdModels(
     "✏️ EDIT • FLUX.1 Kontext Pro",
     "",
     "🧪 MODEL TESTING",
-    "🌱 Seedream 4.0 • 2K / 4K",
-    "🌿 Seedream 4.5 • 2K / 4K",
     "🧠 GPT Image 2 • 2K / 4K",
     "",
     ...(isAdmin(userId) ? [
