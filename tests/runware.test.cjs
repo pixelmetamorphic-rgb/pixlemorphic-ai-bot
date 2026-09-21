@@ -107,18 +107,54 @@ test("8K master validates real PNG dimensions and submits exactly one upscale", 
 
 test("8K original is delivered as document or download without another generation", async () => {
   for (const mode of ["document", "oversize", "telegram-failure"]) {
-    const h = boot(success);
+    const h = boot(success, { RAILWAY_PUBLIC_DOMAIN: "bot.example.com" });
     h.context.mode = mode;
     h.run(`globalThis.docs = []; globalThis.messages = [];
       sendDocument = async (...args) => { docs.push(args); if (mode === "telegram-failure") throw Error("delivery"); };
       sendMessage = async (...args) => messages.push(args);`);
     h.context.bytes = mode === "oversize" ? 70000000 : 100;
-    await h.run('deliver8KMaster(123,{url:"https://images.example/master.png",fileSize:bytes},"8K")');
+    await h.run('deliver8KMaster(123,{url:"https://v3b.fal.media/master.png",fileSize:bytes},"8K")');
     assert.equal(h.context.docs.length, mode === "oversize" ? 0 : 1);
     assert.equal(h.context.messages.length, mode === "document" ? 0 : 1);
-    if (h.context.messages.length) assert.match(h.context.messages[0][1], /master.png/);
+    if (h.context.messages.length) {
+      assert.match(h.context.messages[0][1], /https:\/\/bot.example.com\/download\//);
+      assert.doesNotMatch(h.context.messages[0][1], /fal\.media/);
+    }
     assert.equal(h.requests.length, 0);
   }
+});
+test("private download streams bytes without exposing upstream and rejects missing tokens", async () => {
+  for (const mode of ["ok", "expired", "upstream-error"]) {
+    let piped = false;
+    const h = boot(async (_url, options) => {
+      assert.equal(options.redirect, "error");
+      if (mode === "upstream-error") throw Error("https://secret.fal.media/file.png");
+      return { ok: true, headers: { get: k => k === "content-type" ? "image/png" : "123" },
+        body: { on() {}, destroy() {}, pipe() { piped = true; } } };
+    }, { RAILWAY_PUBLIC_DOMAIN: "bot.example.com" });
+    const url = await h.run('createPrivateDownload("https://v3b.fal.media/source.png")');
+    const token = url.split("/").pop();
+    if (mode === "expired") h.values.delete("download:" + token);
+    let status = 200, body = "";
+    const headers = {};
+    h.context.req = { params: { token } };
+    h.context.res = { headersSent: false, on() {}, destroy() {},
+      setHeader(k,v) { headers[k] = v; },
+      status(s) { status = s; return this; }, send(s) { body = s; } };
+    await h.run("handlePrivateDownload(req,res)");
+    assert.equal(piped, mode === "ok");
+    assert.equal(status, mode === "ok" ? 200 : mode === "expired" ? 404 : 502);
+    assert.doesNotMatch(JSON.stringify(headers) + body, /fal.media|source.png/);
+    if (mode === "ok") assert.match(headers["Content-Disposition"], /PIXLEMORPHIC/);
+    if (mode === "expired") assert.equal(h.requests.length, 0);
+  }
+});
+
+test("download creation fails closed without configuration and rejects foreign URLs", async () => {
+  const h = boot(success);
+  await assert.rejects(h.run('createPrivateDownload("https://v3b.fal.media/a.png")'));
+  await assert.rejects(h.run('createPrivateDownload("https://evil.example/a.png")'));
+  assert.equal(h.values.size, 0);
 });
 function success(_url, options) {
   const [task] = JSON.parse(options.body);
