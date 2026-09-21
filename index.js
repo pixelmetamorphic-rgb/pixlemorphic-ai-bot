@@ -237,6 +237,33 @@ const MODELS = {
   }
 };
 
+// Planning basis, not a live FX quote or a promise of net profit.
+// Net receipts must be >= INR 1 per redeemed credit after discounts/fees/tax.
+// Budget = USD cost * INR 100 * 1.20 contingency; target >=50% contribution.
+// GPT estimates are provisional because token billing varies by request.
+const IMAGE_CREDIT_RATES = {
+  nanobanana2: { "1k": 10, "2k": 15, "4k": 25 },
+  nanobanana2edit: { "1k": 10, "2k": 15, "4k": 25 },
+  edit: { pro: 15 },
+  flux2klein9b: { "1k": 2, "2k": 2 },
+  seedream50lite: { "2k": 10 },
+  seedream50pro: { "1k": 15, "2k": 25 },
+  qwenimage30pro: { "1k": 10, "2k": 20 },
+  zimageturbo: { "2k": 2 },
+  nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
+  nanobananaproedit: { "2k": 40 },
+  ideogramv3: { "2k": 8 },
+  gptimage2: { "2k": 30, "4k": 125 },
+  nano8kmaster: { "8k": 150 }
+};
+for (const [key, model] of Object.entries(MODELS)) {
+  for (const [quality, config] of Object.entries(model.qualities)) {
+    const rate = IMAGE_CREDIT_RATES[key]?.[quality];
+    if (!Number.isSafeInteger(rate) || rate <= 0) throw new Error("Missing image credit rate");
+    config.cost = rate;
+  }
+}
+
 const PLAN_ACCESS = {
   trial: new Set(["gptimage2"]),
   promo: new Set(["gptimage2", "edit"]),
@@ -526,20 +553,11 @@ async function addCredits(
   userId,
   amount
 ) {
-  const current =
-    await getCredits(userId);
-
-  if (current === Infinity) {
-    return true;
-  }
-
-  await rSet(
-    `u:${userId}:credits`,
-    Math.max(
-      0,
-      current + amount
-    )
-  );
+  if (isAdmin(userId)) return true;
+  if (!Number.isSafeInteger(amount) || amount <= 0) throw new Error("Invalid credit amount");
+  if (!redis) throw new Error("Redis is not configured");
+  // Atomic increment prevents refunds from overwriting concurrent top-ups.
+  await redis.incrby(`u:${userId}:credits`, amount);
 
   return true;
 }
@@ -688,6 +706,8 @@ function qualityLabel(
   modelKey,
   qualityKey
 ) {
+  if (modelKey === "ideogramv3") return "Native • Turbo";
+  if (modelKey === "gptimage2" && qualityKey === "4k") return "High • up to 4K";
   const q =
     MODELS[
       modelKey
@@ -2395,6 +2415,7 @@ async function falNano8KMaster(prompt, ratioKey) {
   const source = await inspectMasterPng(base.url);
   const [rw, rh] = getRatio(ratioKey).label.split(":").map(Number);
   if (Math.max(source.width, source.height) < 3840 ||
+      source.width * source.height * 4 > 72000000 ||
       Math.abs((source.width / source.height) / (rw / rh) - 1) > 0.03) {
     throw new Error("4K source resolution or aspect ratio was not met");
   }
@@ -2757,7 +2778,7 @@ async function falGPTImage2Generate(
    ENGINE ROUTER
 ========================= */
 
-// Backend-only IDs. Testing prices are deliberately unset (admin costs zero).
+// Backend-only IDs. Customer rates are centralized; admin generations remain free in bot credits.
 const RUNWARE_MODELS = {
   runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
@@ -3246,8 +3267,8 @@ function qualityKeyboard(
     ).map(
       (q) => ({
         text:
-          `${q.toUpperCase()} • ` +
-          (model.adminOnly ? "Admin test" : `${model.qualities[q].cost} credits`),
+          `${qualityLabel(modelKey, q)} • ` +
+          `${model.qualities[q].cost} credits` + (model.adminOnly ? " • Admin free" : ""),
         callback_data:
           `q:${modelKey}:${q}`
       })
@@ -3498,7 +3519,7 @@ async function cmdModels(
     "✏️ EDIT • FLUX.1 Kontext Pro",
     "",
     "🧪 MODEL TESTING",
-    "🧠 GPT Image 2 • 2K / 4K",
+      "🧠 GPT Image 2 • 2K / High (up to 4K)",
     "",
     ...(isAdmin(userId) ? [
       "🧪 PRIVATE ADMIN TESTS",
@@ -3510,7 +3531,7 @@ async function cmdModels(
       "Nano Banana Pro • 1K / 2K / 4K",
       "👑 Nano Banana Pro 8K Master • 8K (upscaled)",
       "Nano Banana Pro Edit • 2K",
-      "Ideogram V3 • 2K",
+      "Ideogram V3 • Native / Turbo",
       "Nano Banana 2 • Generate + Edit • 1K / 2K / 4K",
       "Admin tests use no bot credits.",
       ""
@@ -3593,7 +3614,7 @@ async function performGeneration(
   if (
     !(await acquireBusy(
       userId,
-      modelKey === "nano8kmaster" ? 1500 : (MODELS[modelKey]?.adminOnly ? 600 : BUSY_LOCK_SECONDS)
+      modelKey === "nano8kmaster" ? 1500 : 600
     ))
   ) {
     await sendMessage(
@@ -3626,7 +3647,7 @@ async function performGeneration(
       return;
     }
 
-    if (MODELS[modelKey]?.adminOnly && redis) {
+    if (redis) {
       // Keep the existing global slot alive during long async image tests.
       slotHeartbeat = setInterval(() => {
         redis.expire(`busy:${userId}`, modelKey === "nano8kmaster" ? 1500 : 600).catch(() => {});
@@ -3641,6 +3662,13 @@ async function performGeneration(
       getRatio(
         ratioKey
       );
+
+    const deducted = await deductCredits(userId, cost);
+    if (!deducted) {
+      await sendMessage(chatId, "❌ Not enough credits. No generation was started.");
+      return;
+    }
+    charged = !isAdmin(userId);
 
     await sendMessage(
       chatId,
@@ -3671,23 +3699,6 @@ async function performGeneration(
       );
     }
 
-    const deducted =
-      await deductCredits(
-        userId,
-        cost
-      );
-
-    if (!deducted) {
-      throw new Error(
-        "Credit deduction failed"
-      );
-    }
-
-    charged =
-      !isAdmin(
-        userId
-      );
-
     let caption =
       `✨ PIXELMETA AI\n\n` +
       `${modelLabel(modelKey)}\n` +
@@ -3697,6 +3708,11 @@ async function performGeneration(
       )}\n` +
       `Ratio: ${modelKey === "edit" ? "SOURCE" : ratio.label}\n` +
       `⚡ Used: ${isAdmin(userId) ? 0 : cost} credits`;
+
+    if (modelKey === "gptimage2") {
+      const requested = imageSizeFor(ratioKey, qualityKey, "gpt");
+      caption += `\nRequested size: ${requested.width} × ${requested.height} px`;
+    }
 
     if (
       result.approximate &&
@@ -5080,7 +5096,7 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "nano-banana-2-kie-v1",
+      release: "image-credit-economics-v1",
       kie: Boolean(KIE_API_KEY),
       redis:
         redisStatus,
