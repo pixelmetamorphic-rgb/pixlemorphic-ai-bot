@@ -45,4 +45,4 @@ Positive customer prices for every configured image tier; admin exempt. Credits 
 
 Not yet final: retail pack value, exact Kontext charge, worst-case GPT token costs, actual landed USD cost, provider failure rates and fixed-cost allocation. Existing customer access was not expanded. All legacy admin model flags remain.
 
-Quality labels must not promise native resolution unsupported by the engine: Ideogram uses native preset dimensions, GPT high square is 2880x2880 while landscape is3840x2160. The existing label mapping needs customer-facing correction before launch. 8K is explicitly upscaled.
+Quality labels corrected: Ideogram displays Native / Turbo; GPT displays High / up to 4K and requested pixel dimensions. GPT high square is 2880x2880 while landscape is 3840x2160. 8K is explicitly upscaled. Topaz stage refuses projected output over 72MP to bound its charge.
