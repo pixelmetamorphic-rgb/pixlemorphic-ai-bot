@@ -22,6 +22,7 @@ const FAL_API_KEY =
   process.env.FAL_API_KEY || process.env.FAL_KEY;
 const REDIS_URL = process.env.REDIS_URL;
 const RUNWARE_API_KEY = process.env.RUNWARE_API_KEY || "";
+const KIE_API_KEY = process.env.KIE_API_KEY || "";
 const RUNWARE_TIMEOUT_MS = 360000;
 const TG_SECRET_TOKEN =
   process.env.TG_SECRET_TOKEN || "";
@@ -115,6 +116,16 @@ const PLAN_DEFAULT_CREDITS = {
 ========================= */
 
 const MODELS = {
+  nanobanana2: {
+    key: "nanobanana2", label: "🍌 Nano Banana 2", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 }, "4k": { cost: 0 } },
+    engines: { primary: "kie_nano2", backup: null }
+  },
+  nanobanana2edit: {
+    key: "nanobanana2edit", label: "✏️ Nano Banana 2 Edit", type: "i2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 }, "4k": { cost: 0 } },
+    engines: { primary: "kie_nano2_edit", backup: null }
+  },
   edit: {
     key: "edit",
     label: "✏️ Pixlemeta EDIT (FLUX.1 Kontext Pro)",
@@ -2879,6 +2890,84 @@ async function runwareGenerate(engine, prompt, qualityKey, ratioKey, extra = {})
   }
 }
 
+// Never retry task creation: a lost response may already represent a paid job.
+async function kieRequest(url, body) {
+  const response = await fetch(url, {
+    method: body ? "POST" : "GET", timeout: 30000, redirect: "error",
+    headers: { Authorization: `Bearer ${KIE_API_KEY}`, "Content-Type": "application/json" },
+    ...(body ? { body: JSON.stringify(body) } : {})
+  });
+  if (!response.ok) throw new Error(`Provider HTTP ${response.status}`);
+  const data = await response.json();
+  if (data.code !== 200) throw new Error("Provider rejected request");
+  return data.data;
+}
+
+function kieHttpsUrl(value) {
+  const url = new URL(value);
+  if (url.protocol !== "https:" || url.username || url.password || url.port) {
+    throw new Error("Invalid image URL");
+  }
+  return url.href;
+}
+
+async function kieUploadSource(imageUrl) {
+  // Download Telegram media ourselves so the bot token never reaches Kie.
+  const url = new URL(imageUrl);
+  if (url.origin !== "https://api.telegram.org" ||
+      !url.pathname.startsWith(`/file/bot${TG_TOKEN}/`)) {
+    throw new Error("Invalid edit source");
+  }
+  const response = await fetch(imageUrl, { timeout: 30000, size: 10 * 1024 * 1024, redirect: "error" });
+  if (!response.ok) throw new Error("Source download failed");
+  const bytes = await response.buffer();
+  if (!bytes.length || bytes.length > 10 * 1024 * 1024) throw new Error("Invalid source size");
+  const mime = (response.headers.get("content-type") || "").split(";")[0];
+  const ext = { "image/jpeg": "jpg", "image/png": "png", "image/webp": "webp" }[mime];
+  if (!ext) throw new Error("Unsupported source image");
+  const uploaded = await kieRequest("https://kieai.redpandaai.co/api/file-base64-upload", {
+    base64Data: `data:${mime};base64,${bytes.toString("base64")}`,
+    uploadPath: "images/pixlemorphic", fileName: `${randomUUID()}.${ext}`
+  });
+  return kieHttpsUrl(uploaded.downloadUrl);
+}
+
+async function kieNano2Generate(prompt, qualityKey, ratioKey, imageUrl = null) {
+  if (!KIE_API_KEY) throw new Error("Image service is not configured");
+  if (!["1k", "2k", "4k"].includes(qualityKey) || !RATIOS[ratioKey]) {
+    throw new Error("Invalid image settings");
+  }
+  let taskId;
+  try {
+    const source = imageUrl ? await kieUploadSource(imageUrl) : null;
+    const created = await kieRequest("https://api.kie.ai/api/v1/jobs/createTask", {
+      model: "nano-banana-2",
+      input: { prompt, resolution: qualityKey.toUpperCase(),
+        aspect_ratio: RATIOS[ratioKey].label, output_format: "png",
+        image_input: source ? [source] : [] }
+    });
+    taskId = created?.taskId;
+    if (typeof taskId !== "string" || !/^[a-zA-Z0-9_-]+$/.test(taskId)) throw new Error("Missing task ID");
+    const deadline = Date.now() + 480000;
+    while (Date.now() < deadline) {
+      await sleep(3000);
+      const task = await kieRequest(`https://api.kie.ai/api/v1/jobs/recordInfo?taskId=${encodeURIComponent(taskId)}`);
+      if (task?.taskId && task.taskId !== taskId) throw new Error("Task mismatch");
+      if (task?.state === "fail") throw new Error("Generation failed");
+      if (task?.state === "success") {
+        const result = typeof task.resultJson === "string" ? JSON.parse(task.resultJson) : task.resultJson;
+        const url = kieHttpsUrl(result?.resultUrls?.[0]);
+        console.log("kie_generation_audit", JSON.stringify({ taskId, qualityKey, edit: Boolean(imageUrl), status: "success" }));
+        return { url, approximate: false };
+      }
+    }
+    throw new Error("Generation timed out");
+  } catch {
+    console.error("kie_generation_audit", JSON.stringify({ taskId, qualityKey, status: "failed" }));
+    throw new Error("Nano Banana 2 could not complete. Please check task status before retrying.");
+  }
+}
+
 async function runEngine(
   engine,
   prompt,
@@ -2890,6 +2979,11 @@ async function runEngine(
     return runwareGenerate(engine, prompt, qualityKey, ratioKey, extra);
   }
   switch (engine) {
+    case "kie_nano2":
+      return kieNano2Generate(prompt, qualityKey, ratioKey);
+    case "kie_nano2_edit":
+      if (!extra.imageUrl) throw new Error("An image is required for editing");
+      return kieNano2Generate(prompt, qualityKey, ratioKey, extra.imageUrl);
     case "fal_schnell":
       return falSchnellGenerate(
         prompt,
@@ -3128,11 +3222,10 @@ function imageKeyboard(userId) {
         [{ text: "🧪 Nano Banana Pro", callback_data: "m:nanobananapro" }],
         [{ text: "🧪 👑 Nano Banana Pro 8K Master", callback_data: "m:nano8kmaster" }],
         [{ text: "🧪 EDIT • Nano Banana Pro", callback_data: "m:nanobananaproedit" }],
-        [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }]
+        [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }],
+        [{ text: "🍌 Nano Banana 2", callback_data: "m:nanobanana2" }],
+        [{ text: "✏️ EDIT • Nano Banana 2", callback_data: "m:nanobanana2edit" }]
       ] : []),
-      [
-        { text: "🍌 Nano Banana 2 • SOON", callback_data: "soon:nano2" }
-      ],
       [
         { text: "⬅️ Back", callback_data: "x:home" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
@@ -3418,12 +3511,10 @@ async function cmdModels(
       "👑 Nano Banana Pro 8K Master • 8K (upscaled)",
       "Nano Banana Pro Edit • 2K",
       "Ideogram V3 • 2K",
+      "Nano Banana 2 • Generate + Edit • 1K / 2K / 4K",
       "Admin tests use no bot credits.",
       ""
     ] : []),
-    "⏳ UPCOMING",
-    "🍌 Nano Banana 2",
-    "",
     "🎬 VIDEO — COMING SOON",
     "Wan 2.2 • LTX-2 • Kling 3.0 • Wan 2.7",
     "Seedance 2.0 Fast • Seedance 2.0 • Seedance 2.5",
@@ -3619,7 +3710,7 @@ async function performGeneration(
       caption += `\n\n4K → 8K upscale • ${result.width} × ${result.height} px`;
       await deliver8KMaster(chatId, result, caption);
     } else if (
-      qualityKey === "8k"
+      qualityKey === "8k" || modelKey === "nanobanana2" || modelKey === "nanobanana2edit"
     ) {
       await sendDocument(
         chatId,
@@ -4005,7 +4096,7 @@ async function onCallback(
       );
     }
 
-    if (MODELS[modelKey]?.type === "i2i") {
+    if (MODELS[modelKey]?.type === "i2i" && modelKey !== "nanobanana2edit") {
       await setFlow(
         userId,
         {
@@ -4175,7 +4266,7 @@ async function onCallback(
       userId,
       {
         step:
-          "await_prompt",
+          modelKey === "nanobanana2edit" ? "await_edit_image" : "await_prompt",
         modelKey,
         qualityKey,
         ratioKey
@@ -4189,6 +4280,9 @@ async function onCallback(
 
     let note = "";
 
+    if (modelKey === "nanobanana2edit") {
+      return sendMessage(chatId, `✏️ Nano Banana 2 Edit • ${qualityKey.toUpperCase()} • ${ratio.label}\n\nSend one image, then your edit instruction.`);
+    }
 
     return sendMessage(
       chatId,
@@ -4271,6 +4365,8 @@ async function onMessage(message) {
           step:
           "await_edit_prompt",
           imageUrl: url,
+          qualityKey: currentFlow.qualityKey,
+          ratioKey: currentFlow.ratioKey,
           modelKey: currentFlow.modelKey || "edit"
         }
       );
@@ -4479,8 +4575,8 @@ async function onMessage(message) {
       chatId,
       userId,
       flow.modelKey || "edit",
-      flow.modelKey === "nanobananaproedit" ? "2k" : "pro",
-      "sq",
+      flow.qualityKey || (flow.modelKey === "nanobananaproedit" ? "2k" : "pro"),
+      flow.ratioKey || "sq",
       instruction,
       {
         imageUrl
@@ -4984,7 +5080,8 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "image-admin-tests-v2",
+      release: "nano-banana-2-kie-v1",
+      kie: Boolean(KIE_API_KEY),
       redis:
         redisStatus,
       fal:
