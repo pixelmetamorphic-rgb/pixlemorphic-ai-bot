@@ -115,47 +115,6 @@ const PLAN_DEFAULT_CREDITS = {
 ========================= */
 
 const MODELS = {
-  cinematic: {
-    key: "cinematic",
-    label: "🎬 Pixlemeta Cinematic",
-    type: "t2i",
-    qualities: {
-      "2k": { cost: 2 },
-      "4k": { cost: 4 }
-    },
-    engines: {
-      primary: "fal_schnell",
-      backup: null
-    }
-  },
-
-  realism: {
-    key: "realism",
-    label: "📸 Pixlemeta Realism (DSLR)",
-    type: "t2i",
-    qualities: {
-      "2k": { cost: 6 },
-      "4k": { cost: 15 }
-    },
-    engines: {
-      primary: "fal_flux_ultra_realism",
-      backup: "replicate_sdxl"
-    }
-  },
-
-  ultra8k: {
-    key: "ultra8k",
-    label: "🟪 Pixlemeta Ultra 8K Realism",
-    type: "t2i",
-    qualities: {
-      "8k": { cost: 30 }
-    },
-    engines: {
-      primary: "fal_flux_pro_8k",
-      backup: null
-    }
-  },
-
   edit: {
     key: "edit",
     label: "✏️ Pixlemeta EDIT (FLUX.1 Kontext Pro)",
@@ -186,20 +145,9 @@ const MODELS = {
 };
 
 const PLAN_ACCESS = {
-  trial: new Set([
-    "cinematic",
-    "realism"
-  ]),
-  promo: new Set([
-    "cinematic",
-    "realism",
-    "ultra8k"
-  ]),
-  paid: new Set([
-    "cinematic",
-    "realism",
-    "ultra8k"
-  ]),
+  trial: new Set(["gptimage2"]),
+  promo: new Set(["gptimage2", "edit"]),
+  paid: new Set(["gptimage2", "edit"]),
   admin: new Set(
     Object.keys(MODELS)
   )
@@ -1705,31 +1653,10 @@ function inferModelQualityFromText(
     ).toLowerCase();
 
   let modelKey =
-    "cinematic";
+    "gptimage2";
 
   let qualityKey =
     "2k";
-
-  if (
-    lower.includes("realism") ||
-    lower.includes("realistic") ||
-    lower.includes("dslr")
-  ) {
-    modelKey =
-      "realism";
-  }
-
-  if (
-    lower.includes("ultra 8k") ||
-    lower.includes("8k")
-  ) {
-    modelKey =
-      "ultra8k";
-    qualityKey =
-      "8k";
-  }
-
-
 
   if (
     lower.includes("gpt image")
@@ -1740,8 +1667,8 @@ function inferModelQualityFromText(
 
   if (
     lower.includes("4k") &&
-    modelKey !==
-      "ultra8k"
+    modelKey ===
+      "gptimage2"
   ) {
     qualityKey =
       "4k";
@@ -2950,13 +2877,6 @@ function imageKeyboard(userId) {
   return {
     inline_keyboard: [
       [
-        { text: "🎬 Cinematic ✅", callback_data: "m:cinematic" },
-        { text: "📸 Realism ✅", callback_data: "m:realism" }
-      ],
-      [
-        { text: "🟪 Ultra 8K Realism ✅", callback_data: "m:ultra8k" }
-      ],
-      [
         { text: "✏️ EDIT • Kontext Pro ✅", callback_data: "m:edit" }
       ],
       [
@@ -3244,9 +3164,6 @@ async function cmdModels(
     "📚 PIXELMETA MODEL CATALOG",
     "",
     "✅ LIVE",
-    "🎬 Cinematic • 2K / 4K",
-    "📸 Realism • 2K / 4K",
-    "🟪 Ultra 8K Realism • 8K",
     "✏️ EDIT • FLUX.1 Kontext Pro",
     "",
     "🧪 MODEL TESTING",
@@ -3556,12 +3473,6 @@ async function quickGen(
   let qualityKey =
     parsed.qualityKey;
 
-  if (
-    modelKey === "ultra8k"
-  ) {
-    qualityKey =
-      "8k";
-  }
 
   if (
     !isValidQuality(
@@ -4033,16 +3944,6 @@ async function onCallback(
 
     let note = "";
 
-    if (
-      ratioKey === "45" &&
-      (
-        modelKey === "realism" ||
-        modelKey === "ultra8k"
-      )
-    ) {
-      note =
-        "\n\nℹ️ This engine uses the closest native base ratio for 4:5.";
-    }
 
     return sendMessage(
       chatId,
