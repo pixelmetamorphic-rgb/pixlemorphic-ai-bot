@@ -197,92 +197,6 @@ const MODELS = {
     }
   },
 
-  fluxdev: {
-    key: "fluxdev",
-    label: "⚡ FLUX.1 [dev]",
-    type: "t2i",
-    qualities: {
-      "2k": { cost: 4 }
-    },
-    engines: {
-      primary: "fal_flux_dev",
-      backup: null
-    }
-  },
-
-  flux2klein9b: {
-    key: "flux2klein9b",
-    label: "FLUX.2 [klein] 9B",
-    type: "t2i",
-    adminOnly: true,
-    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
-    engines: { primary: "runware_flux2klein9b", backup: null }
-  },
-  seedream50lite: {
-    key: "seedream50lite",
-    label: "Seedream 5.0 Lite",
-    type: "t2i",
-    adminOnly: true,
-    ratios: ["sq", "34", "169", "916"],
-    qualities: { "2k": { cost: 0 } },
-    engines: { primary: "runware_seedream50lite", backup: null }
-  },
-  seedream50pro: {
-    key: "seedream50pro",
-    label: "Seedream 5.0 Pro",
-    type: "t2i",
-    adminOnly: true,
-    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
-    engines: { primary: "runware_seedream50pro", backup: null }
-  },
-  qwenimage30pro: {
-    key: "qwenimage30pro",
-    label: "Qwen-Image-3.0-Pro",
-    type: "t2i",
-    adminOnly: true,
-    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
-    engines: { primary: "runware_qwenimage30pro", backup: null }
-  },
-  zimageturbo: {
-    key: "zimageturbo",
-    label: "Z-Image-Turbo",
-    type: "t2i",
-    adminOnly: true,
-    ratios: ["sq", "34", "169", "916"],
-    qualities: { "2k": { cost: 0 } },
-    engines: { primary: "runware_zimageturbo", backup: null }
-  },
-  nanobananapro: {
-    key: "nanobananapro",
-    label: "Nano Banana Pro",
-    type: "t2i",
-    adminOnly: true,
-    qualities: {
-      "1k": { cost: 0 },
-      "2k": { cost: 0 },
-      "4k": { cost: 0 }
-    },
-    engines: { primary: "nano_banana_pro", backup: null }
-  },
-  nanobananaproedit: {
-    key: "nanobananaproedit",
-    label: "Nano Banana Pro Edit",
-    type: "i2i",
-    adminOnly: true,
-    qualities: { "2k": { cost: 0 } },
-    // Runware's current google:4@2 route rejects image input. Keep its
-    // cheaper text-to-image route, but send edits to Nano Banana Pro on FAL.
-    engines: { primary: "fal_nano_banana_pro_edit", backup: null }
-  },
-  ideogramv3: {
-    key: "ideogramv3",
-    label: "Ideogram V3",
-    type: "t2i",
-    adminOnly: true,
-    ratios: ["sq", "34", "169", "916"],
-    qualities: { "2k": { cost: 0 } },
-    engines: { primary: "fal_ideogram_v3", backup: null }
-  },
 
   gptimage2: {
     key: "gptimage2",
@@ -1857,15 +1771,6 @@ function inferModelQualityFromText(
       "seedream4";
   }
 
-  if (
-    lower.includes("flux dev") ||
-    lower.includes("flux.1 dev")
-  ) {
-    modelKey =
-      "fluxdev";
-    qualityKey =
-      "2k";
-  }
 
   if (
     lower.includes("gpt image")
@@ -3100,7 +3005,6 @@ function imageKeyboard(userId) {
         { text: "🌿 Seedream 4.5 🧪", callback_data: "m:seedream45" }
       ],
       [
-        { text: "⚡ FLUX.1 [dev] 🧪", callback_data: "m:fluxdev" },
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       ...(isAdmin(userId) ? [
@@ -3393,7 +3297,6 @@ async function cmdModels(
     "🧪 MODEL TESTING",
     "🌱 Seedream 4.0 • 2K / 4K",
     "🌿 Seedream 4.5 • 2K / 4K",
-    "⚡ FLUX.1 [dev] • 2K",
     "🧠 GPT Image 2 • 2K / 4K",
     "",
     ...(isAdmin(userId) ? [
@@ -3402,6 +3305,7 @@ async function cmdModels(
       "Seedream 5.0 Lite • 2K",
       "Qwen-Image-3.0-Pro • 1K / 2K",
       "Seedream 5.0 Pro • 1K / 2K",
+      "Z-Image-Turbo • 2K",
       "Admin tests use no bot credits.",
       ""
     ] : []),
