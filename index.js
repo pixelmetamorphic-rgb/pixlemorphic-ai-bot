@@ -128,6 +128,88 @@ const MODELS = {
     }
   },
 
+  flux2klein9b: {
+    key: "flux2klein9b",
+    label: "FLUX.2 [klein] 9B",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_flux2klein9b", backup: null }
+  },
+  seedream50lite: {
+    key: "seedream50lite",
+    label: "Seedream 5.0 Lite",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "runware_seedream50lite", backup: null }
+  },
+  seedream50pro: {
+    key: "seedream50pro",
+    label: "Seedream 5.0 Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_seedream50pro", backup: null }
+  },
+  qwenimage30pro: {
+    key: "qwenimage30pro",
+    label: "Qwen-Image-3.0-Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_qwenimage30pro", backup: null }
+  },
+  zimageturbo: {
+    key: "zimageturbo",
+    label: "Z-Image-Turbo",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "runware_zimageturbo", backup: null }
+  },
+  nanobananapro: {
+    key: "nanobananapro",
+    label: "Nano Banana Pro",
+    type: "t2i",
+    adminOnly: true,
+    qualities: {
+      "1k": { cost: 0 },
+      "2k": { cost: 0 },
+      "4k": { cost: 0 }
+    },
+    engines: { primary: "nano_banana_pro", backup: null }
+  },
+  nano8kmaster: {
+    key: "nano8kmaster",
+    label: "👑 Nano Banana Pro 8K Master",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "45", "34", "169", "916"],
+    qualities: { "8k": { cost: 0 } },
+    engines: { primary: "fal_nano_8k_master", backup: null }
+  },
+  nanobananaproedit: {
+    key: "nanobananaproedit",
+    label: "Nano Banana Pro Edit",
+    type: "i2i",
+    adminOnly: true,
+    qualities: { "2k": { cost: 0 } },
+    // Runware's current google:4@2 route rejects image input. Keep its
+    // cheaper text-to-image route, but send edits to Nano Banana Pro on FAL.
+    engines: { primary: "fal_nano_banana_pro_edit", backup: null }
+  },
+  ideogramv3: {
+    key: "ideogramv3",
+    label: "Ideogram V3",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "fal_ideogram_v3", backup: null }
+  },
 
   gptimage2: {
     key: "gptimage2",
@@ -2259,6 +2341,88 @@ async function falNanoBananaProGenerate(
   };
 }
 
+// Read the actual PNG header, including when provider metadata omits dimensions.
+// Stop after IHDR; never buffer a full 8K PNG just to inspect its size.
+async function inspectMasterPng(url) {
+  if (new URL(url).protocol !== "https:") throw new Error("Invalid image URL");
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 30000);
+  let response;
+  try {
+    response = await fetch(url, {
+      headers: { Range: "bytes=0-23" }, signal: controller.signal
+    });
+    if (!response.ok) throw new Error("Image dimensions could not be read");
+    const range = response.headers.get("content-range") || "";
+    const total = /\/(\d+)$/.exec(range);
+    const fileSize = total ? Number(total[1]) :
+      (response.status === 200 ? Number(response.headers.get("content-length")) : 0);
+    let header = Buffer.alloc(0);
+    for await (const chunk of response.body) {
+      header = Buffer.concat([header, Buffer.from(chunk).subarray(0, 24 - header.length)]);
+      if (header.length === 24) break;
+    }
+    if (header.length !== 24 ||
+        header.subarray(0, 8).toString("hex") !== "89504e470d0a1a0a" ||
+        header.readUInt32BE(8) !== 13 || header.toString("ascii", 12, 16) !== "IHDR") {
+      throw new Error("Expected a valid PNG image");
+    }
+    const width = header.readUInt32BE(16), height = header.readUInt32BE(20);
+    if (!width || !height || width > 20000 || height > 20000) {
+      throw new Error("Invalid image dimensions");
+    }
+    return { width, height, fileSize: fileSize || null };
+  } finally {
+    response?.body?.destroy?.();
+    clearTimeout(timer);
+  }
+}
+
+async function falNano8KMaster(prompt, ratioKey) {
+  const started = Date.now();
+  const base = await falNanoBananaProGenerate(prompt, "4k", ratioKey);
+  const source = await inspectMasterPng(base.url);
+  const [rw, rh] = getRatio(ratioKey).label.split(":").map(Number);
+  if (Math.max(source.width, source.height) < 3840 ||
+      Math.abs((source.width / source.height) / (rw / rh) - 1) > 0.03) {
+    throw new Error("4K source resolution or aspect ratio was not met");
+  }
+  // One generation and one upscale only; no paid resubmissions on failure.
+  const data = await falQueueRun("topaz/upscale/image/precision", {
+    image_url: base.url,
+    model: "High Fidelity V3",
+    upscale_factor: 2,
+    output_format: "png",
+    face_enhancement: false
+  }, { timeoutMs: 600000 });
+  const url = pickFirstImageUrl(data);
+  if (!url) throw new Error("8K upscale returned no image");
+  const final = await inspectMasterPng(url);
+  if (final.width !== source.width * 2 || final.height !== source.height * 2 ||
+      Math.max(final.width, final.height) < 7680) {
+    throw new Error("8K output dimension validation failed");
+  }
+  console.log("nano_8k_audit", JSON.stringify({
+    baseWidth: source.width, baseHeight: source.height,
+    width: final.width, height: final.height,
+    generationMs: Date.now() - started, status: "validated"
+  }));
+  return { url, ...final, type: "image", ratio: getRatio(ratioKey).label };
+}
+
+async function deliver8KMaster(chatId, result, caption) {
+  if (!result.fileSize || result.fileSize <= 49 * 1024 * 1024) {
+    try {
+      return await sendDocument(chatId, result.url, caption);
+    } catch {
+      // Preserve the paid result if Telegram rejects the file.
+      console.warn("8K document delivery unavailable; sending original download URL");
+    }
+  }
+  return sendMessage(chatId, caption +
+    "\n\n📥 Original PNG download (save your file):\n" + result.url);
+}
+
 async function falIdeogramV3Generate(
   prompt,
   qualityKey,
@@ -2705,6 +2869,9 @@ async function runEngine(
         ratioKey
       );
 
+    case "fal_nano_8k_master":
+      return falNano8KMaster(prompt, ratioKey);
+
     case "fal_nano_banana_pro":
       return falNanoBananaProGenerate(
         prompt,
@@ -2889,6 +3056,7 @@ function imageKeyboard(userId) {
         [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }],
         [{ text: "🧪 Z-Image-Turbo", callback_data: "m:zimageturbo" }],
         [{ text: "🧪 Nano Banana Pro", callback_data: "m:nanobananapro" }],
+        [{ text: "🧪 👑 Nano Banana Pro 8K Master", callback_data: "m:nano8kmaster" }],
         [{ text: "🧪 EDIT • Nano Banana Pro", callback_data: "m:nanobananaproedit" }],
         [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }]
       ] : []),
@@ -3176,12 +3344,15 @@ async function cmdModels(
       "Qwen-Image-3.0-Pro • 1K / 2K",
       "Seedream 5.0 Pro • 1K / 2K",
       "Z-Image-Turbo • 2K",
+      "Nano Banana Pro • 1K / 2K / 4K",
+      "👑 Nano Banana Pro 8K Master • 8K (upscaled)",
+      "Nano Banana Pro Edit • 2K",
+      "Ideogram V3 • 2K",
       "Admin tests use no bot credits.",
       ""
     ] : []),
     "⏳ UPCOMING",
     "🍌 Nano Banana 2",
-    "🍌 Nano Banana Pro",
     "",
     "🎬 VIDEO — COMING SOON",
     "Wan 2.2 • LTX-2 • Kling 3.0 • Wan 2.7",
@@ -3261,7 +3432,7 @@ async function performGeneration(
   if (
     !(await acquireBusy(
       userId,
-      MODELS[modelKey]?.adminOnly ? 600 : BUSY_LOCK_SECONDS
+      modelKey === "nano8kmaster" ? 1500 : (MODELS[modelKey]?.adminOnly ? 600 : BUSY_LOCK_SECONDS)
     ))
   ) {
     await sendMessage(
@@ -3297,6 +3468,7 @@ async function performGeneration(
     if (MODELS[modelKey]?.adminOnly && redis) {
       // Keep the existing global slot alive during long async image tests.
       slotHeartbeat = setInterval(() => {
+        redis.expire(`busy:${userId}`, modelKey === "nano8kmaster" ? 1500 : 600).catch(() => {});
         redis.expire("global:generation", 300).catch((error) => {
           console.error("Generation slot refresh failed:", error.message);
         });
@@ -3373,7 +3545,10 @@ async function performGeneration(
         "\n\nℹ️ 4:5 uses the closest native base ratio on this engine.";
     }
 
-    if (
+    if (modelKey === "nano8kmaster") {
+      caption += `\n\n4K → 8K upscale • ${result.width} × ${result.height} px`;
+      await deliver8KMaster(chatId, result, caption);
+    } else if (
       qualityKey === "8k"
     ) {
       await sendDocument(
@@ -4024,7 +4199,7 @@ async function onMessage(message) {
         userId,
         {
           step:
-            "await_edit_prompt",
+          "await_edit_prompt",
           imageUrl: url,
           modelKey: currentFlow.modelKey || "edit"
         }
