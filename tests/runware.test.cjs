@@ -292,3 +292,70 @@ test("existing Telegram fallback downloads image then uploads it, and large imag
     assert.equal(large ? result.document : result.photo, true);
   }
 });
+
+test("Kie Nano 2 all resolutions create one job, upload edits without Telegram token, poll and return image", async () => {
+  for (const quality of ["1k", "2k", "4k"]) for (const edit of [false, true]) {
+    let polls = 0;
+    const h = boot(async (url, options) => {
+      if (url.startsWith("https://api.telegram.org/file/")) return {
+        ok: true, headers: { get: () => "image/jpeg" }, buffer: async () => Buffer.from("test-image")
+      };
+      if (url.includes("file-base64-upload")) {
+        assert.ok(!options.body.includes("fake-token"));
+        return ok({ code: 200, data: { downloadUrl: "https://tempfile.redpandaai.co/input.jpg" } });
+      }
+      if (url.endsWith("createTask")) {
+        const body = JSON.parse(options.body);
+        assert.equal(body.model, "nano-banana-2");
+        assert.equal(body.input.resolution, quality.toUpperCase());
+        assert.equal(body.input.aspect_ratio, "4:5");
+        assert.equal(body.input.image_input.length, edit ? 1 : 0);
+        assert.ok(!options.body.includes("fake-token"));
+        return ok({ code: 200, data: { taskId: "job-123" } });
+      }
+      assert.ok(url.endsWith("recordInfo?taskId=job-123"));
+      return ok({ code: 200, data: { taskId: "job-123", state: ++polls === 1 ? "waiting" : "success",
+        resultJson: JSON.stringify({ resultUrls: ["https://images.example/result.png"] }) } });
+    }, { KIE_API_KEY: "test-key" });
+    const result = await h.run(`generateWithModel("nanobanana2${edit ? "edit" : ""}","${quality}","blue blanket","45",${edit ? '{imageUrl:"https://api.telegram.org/file/botfake-token/photos/test.jpg"}' : '{}'})`);
+    assert.equal(result.url, "https://images.example/result.png");
+    assert.equal(h.requests.filter(r => r.url.endsWith("createTask")).length, 1);
+    assert.equal(await h.run('canAccess("123", "nanobanana2")'), false);
+    assert.equal(await h.run('canAccess("123", "nanobanana2edit")'), false);
+  }
+});
+
+test("Kie errors never resubmit paid jobs or expose provider details", async () => {
+  for (const scenario of ["reject", "fail", "bad-url", "mismatch", "timeout"]) {
+    const h = boot(async url => {
+      if (url.endsWith("createTask")) return ok({ code: scenario === "reject" ? 402 : 200, data: {taskId:"job"} });
+      return ok({code:200, data:{taskId:scenario === "mismatch" ? "other" : "job",
+        state: scenario === "timeout" ? "waiting" : scenario === "fail" ? "fail" : "success",
+        resultJson: JSON.stringify({resultUrls:["http://unsafe.example/image"]})}});
+    }, {KIE_API_KEY:"test-key"});
+    await assert.rejects(h.run('kieNano2Generate("cat","4k","sq")'), /could not complete/);
+    assert.equal(h.requests.filter(r=>r.url.endsWith("createTask")).length,1);
+  }
+  const h=boot(()=>{throw new Error("Network must not run");});
+  await assert.rejects(h.run('kieNano2Generate("cat","1k","sq")'), /not configured/);
+  assert.equal(h.requests.length,0);
+});
+
+test("Nano 2 edit menu retains selected resolution and ratio through photo and prompt", async () => {
+  const h=boot(async url=>ok({ok:true,result:url.endsWith("getFile") ? {file_path:"photos/input.jpg"} : {message_id:1}}));
+  const calls=[];
+  h.context.captureGeneration=(...args)=>calls.push(args);
+  h.run('performGeneration = captureGeneration');
+  for(const data of ['m:nanobanana2edit','q:nanobanana2edit:4k','r:nanobanana2edit:4k:169']) {
+    await h.run(`onCallback({id:"cb",from:{id:"${admin}"},message:{chat:{id:1}},data:${JSON.stringify(data)}})`);
+  }
+  assert.equal((await h.run(`getFlow("${admin}")`)).step,"await_edit_image");
+  await h.run(`onMessage({chat:{id:1},from:{id:"${admin}"},photo:[{file_id:"photo"}]})`);
+  const flow=await h.run(`getFlow("${admin}")`);
+  assert.equal(flow.qualityKey,"4k"); assert.equal(flow.ratioKey,"169");
+  await h.run(`onMessage({chat:{id:1},from:{id:"${admin}"},text:"make blanket blue"})`);
+  assert.equal(calls.length,1);
+  assert.equal(calls[0][2],"nanobanana2edit");
+  assert.equal(calls[0][3],"4k"); assert.equal(calls[0][4],"169");
+  assert.ok(calls[0][6].imageUrl.endsWith("photos/input.jpg"));
+});
