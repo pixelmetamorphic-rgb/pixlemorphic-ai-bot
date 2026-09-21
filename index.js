@@ -2416,11 +2416,81 @@ async function deliver8KMaster(chatId, result, caption) {
       return await sendDocument(chatId, result.url, caption);
     } catch {
       // Preserve the paid result if Telegram rejects the file.
-      console.warn("8K document delivery unavailable; sending original download URL");
+      console.warn("8K document delivery unavailable; using private download");
     }
   }
+  const downloadUrl = await createPrivateDownload(result.url);
   return sendMessage(chatId, caption +
-    "\n\n📥 Original PNG download (save your file):\n" + result.url);
+    "\n\n📥 Download original PNG (link valid for 24 hours):\n" + downloadUrl,
+    { disable_web_page_preview: true });
+}
+
+function isMasterMediaUrl(value) {
+  try {
+    const u = new URL(value);
+    return u.protocol === "https:" && !u.username && !u.password &&
+      !u.port && (u.hostname === "fal.media" || u.hostname.endsWith(".fal.media"));
+  } catch { return false; }
+}
+
+async function createPrivateDownload(sourceUrl) {
+  if (!redis || !isMasterMediaUrl(sourceUrl)) throw new Error("Download unavailable");
+  const configured = process.env.PUBLIC_BASE_URL ||
+    (process.env.RAILWAY_PUBLIC_DOMAIN ? "https://" + process.env.RAILWAY_PUBLIC_DOMAIN : "");
+  const base = new URL(configured);
+  if (base.protocol !== "https:" || base.username || base.password) {
+    throw new Error("Secure download address is not configured");
+  }
+  const token = randomUUID();
+  await redis.set("download:" + token, sourceUrl, "EX", 86400);
+  return base.origin + "/download/" + token;
+}
+
+async function handlePrivateDownload(req, res) {
+  res.setHeader("Cache-Control", "private, no-store");
+  res.setHeader("Referrer-Policy", "no-referrer");
+  res.setHeader("X-Content-Type-Options", "nosniff");
+  const token = req.params.token || "";
+  if (!/^[a-f0-9]{8}-[a-f0-9]{4}-4[a-f0-9]{3}-[89ab][a-f0-9]{3}-[a-f0-9]{12}$/.test(token)) {
+    return res.status(404).send("Download not found or expired.");
+  }
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 300000);
+  let upstream;
+  const cleanup = () => {
+    clearTimeout(timer);
+    controller.abort();
+    upstream?.body?.destroy?.();
+  };
+  res.on("close", cleanup);
+  res.on("finish", cleanup);
+  try {
+    const source = redis && await redis.get("download:" + token);
+    if (!source || !isMasterMediaUrl(source)) {
+      clearTimeout(timer);
+      return res.status(404).send("Download not found or expired.");
+    }
+    // Stream through our server: never redirect the browser to the supplier.
+    upstream = await fetch(source, { redirect: "error", signal: controller.signal });
+    if (!upstream.ok || !upstream.body ||
+        !(upstream.headers.get("content-type") || "").startsWith("image/png")) {
+      throw new Error("Download unavailable");
+    }
+    res.setHeader("Content-Type", "image/png");
+    res.setHeader("Content-Disposition", 'attachment; filename="PIXLEMORPHIC-8K-Master.png"');
+    const size = upstream.headers.get("content-length");
+    if (size && /^\d+$/.test(size)) res.setHeader("Content-Length", size);
+    upstream.body.on("error", () => {
+      cleanup();
+      if (!res.headersSent) res.status(502).send("Download unavailable. Please try again.");
+      else res.destroy();
+    });
+    upstream.body.pipe(res);
+  } catch {
+    cleanup();
+    if (!res.headersSent) return res.status(502).send("Download unavailable. Please try again.");
+    res.destroy();
+  }
 }
 
 async function falIdeogramV3Generate(
@@ -4716,6 +4786,8 @@ async function handleAdmin(
 /* =========================
    EXPRESS / WEBHOOK
 ========================= */
+
+app.get("/download/:token", handlePrivateDownload);
 
 app.get(
   "/",
