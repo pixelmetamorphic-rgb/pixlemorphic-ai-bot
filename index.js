@@ -243,6 +243,15 @@ const MODELS = {
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_qwenimage30pro", backup: null }
   },
+  zimageturbo: {
+    key: "zimageturbo",
+    label: "Z-Image-Turbo",
+    type: "t2i",
+    adminOnly: true,
+    ratios: ["sq", "34", "169", "916"],
+    qualities: { "2k": { cost: 0 } },
+    engines: { primary: "runware_zimageturbo", backup: null }
+  },
   nanobananapro: {
     key: "nanobananapro",
     label: "Nano Banana Pro",
@@ -2718,6 +2727,7 @@ const RUNWARE_MODELS = {
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
   runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
   runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" },
+  runware_zimageturbo: { model: "runware:z-image@turbo", steps: 8 },
   runware_nano_banana_pro: { model: "google:4@2" }
 };
 
@@ -3098,6 +3108,7 @@ function imageKeyboard(userId) {
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
         [{ text: "🧪 Seedream 5.0 Pro", callback_data: "m:seedream50pro" }],
+        [{ text: "🧪 Z-Image-Turbo", callback_data: "m:zimageturbo" }],
         [{ text: "🧪 Nano Banana Pro", callback_data: "m:nanobananapro" }],
         [{ text: "🧪 EDIT • Nano Banana Pro", callback_data: "m:nanobananaproedit" }],
         [{ text: "🧪 Ideogram V3", callback_data: "m:ideogramv3" }]
