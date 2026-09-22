@@ -212,7 +212,7 @@ test("new models are hidden and denied for every non-admin plan, including store
     assert.ok(!publicCatalog.includes(label));
     assert.ok(privateCatalog.includes(label));
   }
-  assert.ok(!/runware|fal|replicate|openrouter/i.test(publicCatalog + privateCatalog));
+  assert.ok(!/runware|fal|replicate|openrouter/i.test(publicCatalog)); // Admin-only catalogue names the experimental provider explicitly.
 });
 
 test("all model/quality/ratio choices generate valid bounds and one matching task with cost enabled", async () => {
