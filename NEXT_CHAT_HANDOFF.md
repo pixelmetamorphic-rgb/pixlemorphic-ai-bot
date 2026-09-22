@@ -56,3 +56,12 @@ Read current `index.js`:
 - Never promise self-hosting or uncensored access that providers don't authorize. No minors, ambiguous-age sexual content, non-consensual sexual content or sexual deepfakes of real people.
 - Keep existing working image generation, credits, admin access, Railway webhook, Redis locks and model menu intact when adding providers.
 - To resume, user can say: "NEXT_CHAT_HANDOFF.md padhkar Replicate experimental image model integration continue karo".
+
+## 2026-09-22 latest: seven-model Replicate admin-only expansion
+- Current user request: remove the two unsuccessful Runware adult experimental aliases from the **Adult Image menu** and show seven Replicate-only admin test 1K entries: Pony Realism v2.3, CyberRealistic Pony v8, Pony SDXL, NoobAI Real SDXL v0.1, Realism XL, Juggernaut XL v7, RealVisXL4.
+- The prior Runware aliases are **hidden from this menu**, not deleted from backend configuration; ordinary Runware production/admin entries elsewhere are unchanged.
+- Existing two Pony Replicate entries were preserved; five more entries, API schema mappings, private catalog lines and nominal rate entries were added. All seven `adminOnly: true`, 1K and nominal 10-credit placeholders; actual admin wallet deduction remains zero. These rates are **not** validated for public pricing.
+- Specific official Replicate slugs: `devgmstudios/pony-realism-v23`, `aisha-ai-official/cyber-realistic-pony-v8`, `charlesmccarthy/pony-sdxl`, `aisha-ai-official/noobai-real-sdxl-v0.1`, `asiryan/realism-xl`, `asiryan/juggernaut-xl-v7`, `zelenioncode/realvisxl4`. Version IDs pinned where verified; Realism XL calls the official version-independent model prediction endpoint.
+- Added offline mocking regressions and GitHub Actions check `node --check index.js`, `node --check tests/runware.test.cjs`, `node --test tests/runware.test.cjs`.
+- **No billable Replicate requests** were made. Actual Railway Replicate token validity, per-run charges, output behavior and provider restrictions remain unverified; obtain explicit consent before paid tests. Admin-only preview is not public launch.
+- PR: https://github.com/pixelmetamorphic-rgb/pixlemorphic-ai-bot/pull/5 . Verify merge/deploy/health independently; this file is not a substitute for current `index.js`.
