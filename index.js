@@ -42,6 +42,10 @@ const REPLICATE_SDXL_VERSION =
 
 const MAX_PROMPT_LEN = 900;
 const BUSY_LOCK_SECONDS = 180;
+// Replicate cold starts can exceed the previous six-minute polling window.
+const REPLICATE_POLL_TIMEOUT_MS = Math.max(360000, Math.min(3600000,
+  parseInt(process.env.REPLICATE_POLL_TIMEOUT_MS || "1800000", 10) || 1800000));
+const REPLICATE_POLL_INTERVAL_MS = 5000;
 
 const GLOBAL_GEN_LIMIT = parseInt(
   process.env.GLOBAL_GEN_LIMIT || "3",
@@ -2297,7 +2301,8 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
     throw new Error("Replicate prediction status URL missing or invalid");
   }
   let prediction = created;
-  for (let attempt = 0; attempt < 180; attempt++) {
+  const deadline = Date.now() + REPLICATE_POLL_TIMEOUT_MS;
+  while (Date.now() < deadline) {
     if (prediction.status === "succeeded") {
       const output = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
       if (typeof output !== "string" || !/^https:\/\//.test(output)) {
@@ -2308,14 +2313,15 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
     if (["failed", "canceled"].includes(prediction.status)) {
       throw new Error("Replicate prediction failed or was canceled");
     }
-    await sleep(2000);
+    await sleep(REPLICATE_POLL_INTERVAL_MS);
     const poll = await fetch(pollingUrl, {
       headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` }
     });
     if (!poll.ok) throw new Error(`Replicate polling failed (${poll.status})`);
     prediction = await poll.json();
   }
-  throw new Error("Replicate prediction timed out; check provider job before retrying");
+  console.warn(`Replicate prediction still processing after ${REPLICATE_POLL_TIMEOUT_MS}ms: ${pollingUrl}`);
+  throw new Error("Replicate is still processing this prediction after the bot wait limit. Check the existing prediction before retrying; it may still complete and incur a provider charge.");
 }
 
 /* =========================
@@ -3889,7 +3895,7 @@ async function performGeneration(
     if (redis) {
       // Keep the existing global slot alive during long async image tests.
       slotHeartbeat = setInterval(() => {
-        redis.expire(`busy:${userId}`, modelKey === "nano8kmaster" ? 1500 : 600).catch(() => {});
+        redis.expire(`busy:${userId}`, modelKey === "nano8kmaster" ? 1500 : MODELS[modelKey]?.engines?.primary?.startsWith("replicate_") ? Math.ceil(REPLICATE_POLL_TIMEOUT_MS / 1000) + 120 : 600).catch(() => {});
         redis.expire("global:generation", 300).catch((error) => {
           console.error("Generation slot refresh failed:", error.message);
         });
