@@ -120,3 +120,6 @@ Syntax of merged main index.js was checked successfully.
 4. Price video using same wallet deliberately; packs/bonus/expiry policy not assumed.
 5. Customer UX/branding polish after integrations/rates. Launch only after video ready.
 6. Consider durable credit ledger/reconciliation before broader paid launch.
+
+## Seven Replicate 1K admin-image models (2026-09-22)
+PR #5 adds five models to existing Pony Realism v2.3 and CyberRealistic Pony v8: Pony SDXL, NoobAI Real SDXL v0.1, Realism XL, Juggernaut XL v7, and RealVisXL4. Adult Image menu becomes seven Replicate entries and no longer displays the two failed Runware experimental aliases; underlying Runware engines remain to avoid disturbing other paths. All seven restricted by adminOnly and canAccess; 1K only and nominal 10 customer credits each, admin usage 0 bot credits but actual provider billing applies. Existing production models and credit rates unchanged. Offline regression tests and GitHub Actions check added. **Provider requests, actual account permissions, content moderation and costs are untested**; no paid tests without renewed user authorization. See NEXT_CHAT_HANDOFF.md and current index.js; PR #5 must be checked for merge/deployment.
