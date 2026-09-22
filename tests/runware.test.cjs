@@ -73,8 +73,10 @@ test("uncensored image category is admin-only and disables Runware safety only o
   assert.ok(adminMenu.includes("imgcat:uncensored"));
 
   const ucMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  assert.ok(ucMenu.includes("m:flux2klein4buc"));
-  assert.ok(ucMenu.includes("m:seedream50prouc"));
+  const seven = ["ponyrealism23","cyberpony8","ponysdxl","noobaireal01","realismxl","juggernautxl7","realvisxl4"];
+  for (const key of seven) assert.ok(ucMenu.includes("m:" + key));
+  assert.ok(!ucMenu.includes("m:flux2klein4buc"));
+  assert.ok(!ucMenu.includes("m:seedream50prouc"));
 
   for (const [key, quality] of [["flux2klein4buc","1k"],["seedream50prouc","1k"]]) {
     await h.run(`generateWithModel("${key}","${quality}","adult fashion portrait","sq")`);
@@ -414,4 +416,67 @@ test("reserve before provider call, stop if reservation fails, refund without ov
   await h.run('performGeneration(123,123,"gptimage2","2k","sq","cat")');
   assert.ok(!h.logs.slice(before).flat().some(v=>String(v).includes('MUST NOT RUN')));
   assert.equal(h.values.get('u:123:credits'),150);
+});
+
+// Replicate integration tests: use mocked HTTP only and do not create billable predictions.
+test("seven Replicate 1K models are admin-only, use the correct API schema, and create exactly one prediction", async () => {
+  const engines = ["ponyrealism23","cyberpony8","ponysdxl","noobaireal01","realismxl","juggernautxl7","realvisxl4"];
+  const h = boot(async () => ok({
+    id: "abcd1234", status: "succeeded",
+    urls: { get: "https://api.replicate.com/v1/predictions/abcd1234" },
+    output: ["https://replicate.delivery/result.png"]
+  }), { REPLICATE_API_TOKEN: "replicate-test-secret" });
+  const menu = h.run("JSON.stringify(uncensoredImageKeyboard())");
+  for (const key of engines) {
+    assert.equal(await h.run(`canAccess(123,"${key}")`), false);
+    assert.equal(await h.run(`canAccess("${admin}","${key}")`), true);
+    assert.ok(!h.run("JSON.stringify(imageKeyboard(123))").includes(key));
+    assert.ok(menu.includes("m:" + key));
+    const model = h.run(`MODELS["${key}"]`);
+    assert.deepEqual(Object.keys(model.qualities), ["1k"]);
+    assert.equal(model.adminOnly, true);
+    assert.equal(model.qualities["1k"].cost, 10);
+    const before = h.requests.length;
+    const output = await h.run(`generateWithModel("${key}","1k","adult fashion studio portrait","sq")`);
+    assert.equal(output.url, "https://replicate.delivery/result.png");
+    assert.equal(h.requests.length - before, 1);
+    const req = h.requests.at(-1);
+    assert.match(req.url, /^https:\/\/api\.replicate\.com\/v1\//);
+    assert.equal(req.options.headers.Authorization, "Bearer replicate-test-secret");
+    const body = JSON.parse(req.options.body);
+    assert.equal(body.input.width, 1024);
+    assert.equal(body.input.height, 1024);
+    assert.equal(body.input.prompt, "adult fashion studio portrait");
+    assert.match(body.input.negative_prompt, /minor/);
+    if (key === "realismxl") {
+      assert.equal(req.url, "https://api.replicate.com/v1/models/asiryan/realism-xl/predictions");
+      assert.equal(body.version, undefined);
+    } else {
+      assert.match(body.version, /^[a-f0-9]{64}$/);
+    }
+  }
+  assert.ok(!menu.includes("flux2klein4buc") && !menu.includes("seedream50prouc"));
+  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
+});
+
+test("Replicate failures do not resubmit a potentially billed prediction", async () => {
+  for (const response of [
+    () => ({ok:false,status:503,json:async()=>({detail:"upstream"})}),
+    () => { throw new Error("unknown network result"); },
+    () => ok({id:"abcd1234",status:"succeeded",output:[],urls:{get:"https://api.replicate.com/v1/predictions/abcd1234"}})
+  ]) {
+    const h=boot(response,{REPLICATE_API_TOKEN:"replicate-test-secret"});
+    await assert.rejects(h.run('generateWithModel("realvisxl4","1k","a landscape","sq")'));
+    assert.equal(h.requests.filter(r=>r.options.method==="POST" && r.url.includes("replicate.com")).length,1);
+    assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
+  }
+});
+
+test("Replicate menu navigation and denied non-admin callbacks do not trigger provider requests", async () => {
+  const h=boot(async()=>{ throw Error("should not be called"); },{REPLICATE_API_TOKEN:"replicate-test-secret"});
+  h.context.messages=[];
+  h.run("sendMessage = async (_chat,text) => messages.push(text)");
+  await h.run('performGeneration(123,123,"ponysdxl","1k","sq","a portrait")');
+  assert.equal(h.requests.length,0);
+  assert.ok(h.context.messages.some(x=>x.includes("not available")));
 });
