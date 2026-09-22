@@ -448,11 +448,13 @@ test("seven Replicate 1K models are admin-only, use the correct API schema, and 
     assert.equal(body.input.height, 1024);
     assert.equal(body.input.prompt, "adult fashion studio portrait");
     assert.match(body.input.negative_prompt, /minor/);
+    assert.equal(req.url, "https://api.replicate.com/v1/predictions");
+    assert.match(body.version, /^[a-f0-9]{64}$/);
     if (key === "realismxl") {
-      assert.equal(req.url, "https://api.replicate.com/v1/models/asiryan/realism-xl/predictions");
-      assert.equal(body.version, undefined);
-    } else {
-      assert.match(body.version, /^[a-f0-9]{64}$/);
+      assert.equal(body.version, "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
+      assert.equal(body.input.seed, undefined); // Provider randomizes if seed is omitted.
+      assert.equal(body.input.batch_size, undefined); // Uses num_outputs=1.
+      assert.equal(body.input.num_outputs, 1);
     }
   }
   assert.ok(!menu.includes("flux2klein4buc") && !menu.includes("seedream50prouc"));
@@ -479,4 +481,31 @@ test("Replicate menu navigation and denied non-admin callbacks do not trigger pr
   await h.run('performGeneration(123,123,"ponysdxl","1k","sq","a portrait")');
   assert.equal(h.requests.length,0);
   assert.ok(h.context.messages.some(x=>x.includes("not available")));
+});
+
+test("Replicate creation HTTP errors are classified without exposing prompt or credentials", async () => {
+  const confidentialPrompt = "a private portrait prompt used only in testing";
+  const h = boot(async () => ({ok:false,status:422,json:async () => ({
+    detail:"invalid input schema; private portrait prompt used only in testing"
+  })}), {REPLICATE_API_TOKEN:"replicate-test-secret"});
+  await assert.rejects(h.run(`generateWithModel("realismxl","1k",${JSON.stringify(confidentialPrompt)},"sq")`), /HTTP 422/);
+  assert.equal(h.requests.length,1);
+  assert.equal(h.requests[0].url,"https://api.replicate.com/v1/predictions");
+  const output = JSON.stringify(h.logs);
+  assert.ok(output.includes('replicate_create_failure'));
+  assert.ok(output.includes('invalid_input'));
+  assert.ok(!output.includes(confidentialPrompt));
+  assert.ok(!output.includes("replicate-test-secret"));
+});
+
+test("admin gets safe Replicate HTTP diagnostics and no duplicate billable request", async () => {
+  const h=boot(async()=>({ok:false,status:404,json:async()=>({detail:"model not found"})}),
+    {REPLICATE_API_TOKEN:"replicate-test-secret"});
+  h.context.messages=[];
+  h.run("sendMessage = async (_chat,text) => messages.push(text)");
+  await h.run(`performGeneration("${admin}","${admin}","realismxl","1k","sq","a portrait")`);
+  assert.equal(h.requests.filter(x=>x.url==="https://api.replicate.com/v1/predictions").length,1);
+  assert.ok(h.context.messages.some(x=>x.includes("HTTP 404") && x.includes("model_or_version")));
+  assert.ok(!JSON.stringify(h.context.messages).includes("replicate-test-secret"));
+  assert.ok(h.context.messages.some(x=>x.includes("credits were not charged")));
 });
