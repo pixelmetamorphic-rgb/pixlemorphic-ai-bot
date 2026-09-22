@@ -2269,7 +2269,7 @@ function replicatePonySize(ratioKey) {
   }
   return sizes[ratioKey];
 }
-async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
+async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey, extra = {}) {
   if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN is not configured");
   if (qualityKey !== "1k" || !REPLICATE_PONY[engine]) {
     throw new Error("Unsupported Pony configuration");
@@ -2300,6 +2300,15 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
   if (!pollingUrl || !/^https:\/\/api\.replicate\.com\/v1\/predictions\/[a-z0-9]+$/i.test(pollingUrl)) {
     throw new Error("Replicate prediction status URL missing or invalid");
   }
+  // Save the provider ID before polling, so a restart or timeout cannot lose the job.
+  const predictionId = created.id;
+  if (redis && extra.chatId && /^[a-z0-9]+$/i.test(predictionId || "")) {
+    await redis.set(`replicate:pending:${predictionId}`, JSON.stringify({
+      id: predictionId, chatId: extra.chatId, modelKey: extra.modelKey,
+      createdAt: Date.now()
+    }), "EX", 172800);
+    await redis.zadd("replicate:pending:queue", Date.now() + REPLICATE_POLL_TIMEOUT_MS + 30000, predictionId);
+  }
   let prediction = created;
   const deadline = Date.now() + REPLICATE_POLL_TIMEOUT_MS;
   while (Date.now() < deadline) {
@@ -2308,9 +2317,13 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
       if (typeof output !== "string" || !/^https:\/\//.test(output)) {
         throw new Error("Replicate returned no image URL");
       }
-      return { url: output, type: "image", ratio: getRatio(ratioKey).label };
+      return { url: output, type: "image", ratio: getRatio(ratioKey).label, replicatePredictionId: predictionId };
     }
     if (["failed", "canceled"].includes(prediction.status)) {
+      if (redis && predictionId) {
+        await redis.zrem("replicate:pending:queue", predictionId);
+        await redis.del(`replicate:pending:${predictionId}`);
+      }
       throw new Error("Replicate prediction failed or was canceled");
     }
     await sleep(REPLICATE_POLL_INTERVAL_MS);
@@ -3183,7 +3196,7 @@ async function runEngine(
   extra = {}
 ) {
   if (Object.prototype.hasOwnProperty.call(REPLICATE_PONY, engine)) {
-    return replicatePonyGenerate(engine, prompt, qualityKey, ratioKey);
+    return replicatePonyGenerate(engine, prompt, qualityKey, ratioKey, extra);
   }
   if (Object.prototype.hasOwnProperty.call(RUNWARE_MODELS, engine)) {
     return runwareGenerate(engine, prompt, qualityKey, ratioKey, extra);
@@ -3933,7 +3946,7 @@ async function performGeneration(
         qualityKey,
         prompt,
         ratioKey,
-        extra
+        { ...extra, chatId, modelKey }
       );
 
     generationMetrics = result?.metrics || null;
@@ -3985,6 +3998,10 @@ async function performGeneration(
         caption
       );
     }
+    if (result?.replicatePredictionId && redis) {
+      await redis.zrem("replicate:pending:queue", result.replicatePredictionId);
+      await redis.del(`replicate:pending:${result.replicatePredictionId}`);
+    }
     if (generationMetrics) {
       console.log("image_delivery_audit", JSON.stringify({
         ...generationMetrics, status: "delivered"
@@ -4023,8 +4040,9 @@ async function performGeneration(
     try {
       await sendMessage(
         chatId,
-        "❌ Generation failed.\n\n" +
-        "The image could not be completed or delivered. Please try again later." +
+        (error.message.includes("still processing") && redis
+          ? "⏳ Replicate is still processing. Your prediction has been saved; the bot will check it and send the image if it completes. Please don't regenerate yet."
+          : "❌ Generation failed.\n\nThe image could not be completed or delivered. Please try again later.") +
         (charged
           ? "\n\nYour credit refund could not be confirmed. Please contact support."
           : "\n\nYour credits were not charged, or were automatically returned.")
@@ -5374,6 +5392,66 @@ app.get(
     });
   }
 );
+
+
+/* =========================
+   REPLICATE DELAYED DELIVERY
+   Only polls after the normal 30-minute wait; no new billable predictions.
+========================= */
+async function checkDelayedReplicatePredictions() {
+  if (!redis || !REPLICATE_API_TOKEN || !TG_TOKEN) return;
+  const ids = await redis.zrangebyscore("replicate:pending:queue", "-inf", Date.now(), "LIMIT", 0, 10);
+  for (const id of ids) {
+    if (!/^[a-z0-9]+$/i.test(id)) continue;
+    const lock = await redis.set(`replicate:pending:lock:${id}`, "1", "NX", "EX", 90);
+    if (lock !== "OK") continue;
+    try {
+      const raw = await redis.get(`replicate:pending:${id}`);
+      if (!raw) { await redis.zrem("replicate:pending:queue", id); continue; }
+      const job = JSON.parse(raw);
+      const response = await fetch(`https://api.replicate.com/v1/predictions/${id}`, {
+        headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` }
+      });
+      if (!response.ok) throw new Error(`Delayed Replicate status HTTP ${response.status}`);
+      const prediction = await response.json();
+      if (prediction.status === "succeeded") {
+        const output = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+        if (typeof output !== "string" || !/^https:\/\//.test(output)) {
+          throw new Error("Completed prediction has no valid image URL");
+        }
+        await sendPhoto(job.chatId, output, `✅ Delayed Replicate result • ${modelLabel(job.modelKey)}`);
+        await redis.zrem("replicate:pending:queue", id);
+        await redis.del(`replicate:pending:${id}`);
+        console.log("replicate_delayed_delivery", JSON.stringify({ id, status: "delivered" }));
+      } else if (["failed", "canceled"].includes(prediction.status)) {
+        await sendMessage(job.chatId, `❌ Delayed Replicate prediction ${id} ended: ${prediction.status}.`);
+        await redis.zrem("replicate:pending:queue", id);
+        await redis.del(`replicate:pending:${id}`);
+      } else {
+        const age = Date.now() - job.createdAt;
+        if (age > 24 * 60 * 60 * 1000) {
+          await sendMessage(job.chatId, `⏳ Replicate prediction ${id} is still pending after 24 hours. Check Replicate before retrying.`);
+          await redis.zrem("replicate:pending:queue", id);
+          await redis.del(`replicate:pending:${id}`);
+        } else {
+          await redis.zadd("replicate:pending:queue", Date.now() + 60000, id);
+        }
+      }
+    } catch (error) {
+      console.error("replicate_delayed_delivery_error", id, error.message);
+      await redis.zadd("replicate:pending:queue", Date.now() + 120000, id);
+    } finally {
+      await redis.del(`replicate:pending:lock:${id}`);
+    }
+  }
+}
+if (redis) {
+  const delayedDeliveryTimer = setInterval(() => {
+    checkDelayedReplicatePredictions().catch(error =>
+      console.error("replicate_delayed_worker", error.message));
+  }, 60000);
+  delayedDeliveryTimer.unref();
+}
 
 /* =========================
    START SERVER
