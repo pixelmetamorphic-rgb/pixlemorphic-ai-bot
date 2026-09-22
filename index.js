@@ -147,6 +147,15 @@ const MODELS = {
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_flux2klein9b", backup: null }
   },
+  flux2klein4buc: {
+    key: "flux2klein4buc",
+    label: "🔥 FLUX.2 [klein] 4B • Uncensored",
+    type: "t2i",
+    adminOnly: true,
+    uncensored: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_flux2klein4b_uc", backup: null }
+  },
   seedream50lite: {
     key: "seedream50lite",
     label: "Seedream 5.0 Lite",
@@ -163,6 +172,15 @@ const MODELS = {
     adminOnly: true,
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_seedream50pro", backup: null }
+  },
+  seedream50prouc: {
+    key: "seedream50prouc",
+    label: "🔥 Seedream 5.0 Pro • Uncensored",
+    type: "t2i",
+    adminOnly: true,
+    uncensored: true,
+    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
+    engines: { primary: "runware_seedream50pro_uc", backup: null }
   },
   qwenimage30pro: {
     key: "qwenimage30pro",
@@ -246,8 +264,10 @@ const IMAGE_CREDIT_RATES = {
   nanobanana2edit: { "1k": 10, "2k": 15, "4k": 25 },
   edit: { pro: 15 },
   flux2klein9b: { "1k": 2, "2k": 2 },
+  flux2klein4buc: { "1k": 2, "2k": 2 },
   seedream50lite: { "2k": 10 },
   seedream50pro: { "1k": 15, "2k": 25 },
+  seedream50prouc: { "1k": 15, "2k": 25 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2781,8 +2801,10 @@ async function falGPTImage2Generate(
 // Backend-only IDs. Customer rates are centralized; admin generations remain free in bot credits.
 const RUNWARE_MODELS = {
   runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
+  runware_flux2klein4b_uc: { model: "runware:400@4", steps: 4, safetyOff: true },
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
   runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
+  runware_seedream50pro_uc: { model: "bytedance:seedream@5.0-pro", safetyOff: true },
   runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" },
   runware_zimageturbo: { model: "runware:z-image@turbo", steps: 8 },
   runware_nano_banana_pro: { model: "google:4@2" }
@@ -2857,6 +2879,9 @@ async function runwareGenerate(engine, prompt, qualityKey, ratioKey, extra = {})
     deliveryMethod: "async"
   };
   if (config.steps) task.steps = config.steps;
+  if (config.safetyOff) {
+    task.safety = { checkContent: false };
+  }
   if (extra.imageUrl) task.seedImage = extra.imageUrl;
   const audit = {
     provider: "runware", model: config.model, taskUUID,
@@ -3235,6 +3260,7 @@ function imageKeyboard(userId) {
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       ...(isAdmin(userId) ? [
+        [{ text: "🔥 UNCENSORED • ADMIN TEST", callback_data: "imgcat:uncensored" }],
         [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
@@ -3249,6 +3275,29 @@ function imageKeyboard(userId) {
       ] : []),
       [
         { text: "⬅️ Back", callback_data: "x:home" },
+        { text: "❌ Cancel", callback_data: "x:cancel" }
+      ]
+    ]
+  };
+}
+
+function uncensoredImageKeyboard() {
+  return {
+    inline_keyboard: [
+      [
+        {
+          text: "🔥 FLUX.2 Klein 4B • Fast",
+          callback_data: "m:flux2klein4buc"
+        }
+      ],
+      [
+        {
+          text: "🔥 Seedream 5 Pro • Premium",
+          callback_data: "m:seedream50prouc"
+        }
+      ],
+      [
+        { text: "⬅️ Back", callback_data: "mode:image" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
       ]
     ]
@@ -3454,6 +3503,34 @@ async function showImageMenu(
   );
 }
 
+async function showUncensoredImageMenu(
+  chatId,
+  userId
+) {
+  if (!isAdmin(userId)) {
+    return sendMessage(
+      chatId,
+      "🔒 Uncensored Image is currently in private admin testing."
+    );
+  }
+
+  await setFlow(
+    userId,
+    {
+      step: "choose_model",
+      category: "uncensored"
+    }
+  );
+
+  return sendMessage(
+    chatId,
+    "🔥 UNCENSORED IMAGE • ADMIN TEST\n\n18+ adult creative testing only.\nProvider filtering is disabled only for these two test routes.\n\nChoose a model:",
+    {
+      reply_markup: uncensoredImageKeyboard()
+    }
+  );
+}
+
 async function showVideoMenu(
   chatId,
   userId
@@ -3523,6 +3600,10 @@ async function cmdModels(
     "",
     ...(isAdmin(userId) ? [
       "🧪 PRIVATE ADMIN TESTS",
+      "🔥 UNCENSORED IMAGE • ADMIN TEST",
+      "FLUX.2 [klein] 4B • 1K / 2K",
+      "Seedream 5.0 Pro • 1K / 2K",
+      "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
       "Qwen-Image-3.0-Pro • 1K / 2K",
@@ -3992,6 +4073,15 @@ async function onCallback(
     data === "mode:image"
   ) {
     return showImageMenu(
+      chatId,
+      userId
+    );
+  }
+
+  if (
+    data === "imgcat:uncensored"
+  ) {
+    return showUncensoredImageMenu(
       chatId,
       userId
     );
@@ -5096,8 +5186,9 @@ app.get(
       ok: true,
       service:
         "pixlemorphic-ai-bot",
-      release: "image-credit-economics-v1",
+      release: "uncensored-image-admin-test-v1",
       kie: Boolean(KIE_API_KEY),
+      runware: Boolean(RUNWARE_API_KEY),
       redis:
         redisStatus,
       fal:
@@ -5150,6 +5241,12 @@ app.listen(
     console.log(
       `FAL configured: ${Boolean(
         FAL_API_KEY
+      )}`
+    );
+
+    console.log(
+      `Runware configured: ${Boolean(
+        RUNWARE_API_KEY
       )}`
     );
 
