@@ -517,7 +517,7 @@ test("Natural Skin XL uses the published RealVisXL V4 API-only checker field wit
     output: ["https://replicate.delivery/natural.png"]
   }), { REPLICATE_API_TOKEN: "replicate-test-secret" });
   const privateMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  assert.ok(privateMenu.includes("m:naturalskinxl"));
+  assert.ok(!privateMenu.includes("m:naturalskinxl")); // User rejected this model; backend remains for audit only.
   assert.ok(!h.run("JSON.stringify(imageKeyboard(123))").includes("naturalskinxl"));
   assert.equal(await h.run('canAccess(123,"naturalskinxl")'), false);
   assert.equal(await h.run('canAccess("1078816855","naturalskinxl")'), true);
@@ -566,4 +566,96 @@ test("Natural Skin XL provider error is diagnosed without resubmitting or changi
   assert.equal(h.requests.filter(r => r.options.method === "POST").length, 1);
   assert.ok(h.logs.some(l => l[0] === "replicate_create_failure"));
   assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
+});
+
+test("three new photoreal experiments are private; failed Natural Skin is hidden while Realism XL is locked", async () => {
+  const h = boot(success);
+  const menu = h.run("JSON.stringify(uncensoredImageKeyboard())");
+  const publicMenu = h.run("JSON.stringify(imageKeyboard(123))");
+  for (const key of ["flux2photo","fooocusphoto","flux2klein9blf"]) {
+    assert.ok(menu.includes("m:" + key));
+    assert.ok(!publicMenu.includes(key));
+    assert.equal(await h.run(`canAccess(123,${JSON.stringify(key)})`), false);
+    assert.equal(await h.run(`canAccess("${admin}",${JSON.stringify(key)})`), true);
+    assert.deepEqual(Object.keys(h.run(`MODELS[${JSON.stringify(key)}].qualities`)), ["1k"]);
+  }
+  assert.ok(!menu.includes("m:naturalskinxl"));
+  assert.ok(h.run("MODELS.naturalskinxl"));
+  assert.ok(menu.includes("m:realismxl"));
+  assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
+    "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
+});
+
+test("FAL photoreal variants submit one paid job each with documented photo settings", async () => {
+  const h=boot(async (url, options) => {
+    let data;
+    if(options.method==="POST") {
+      data={request_id:"job1234",
+        status_url:url+"/requests/job1234/status",
+        response_url:url+"/requests/job1234"};
+    } else if(url.endsWith("/status")) {
+      data={status:"COMPLETED"};
+    } else {
+      data={images:[{url:"https://fal.media/files/photo.png"}]};
+    }
+    return {ok:true,status:200,text:async()=>JSON.stringify(data)};
+  },{FAL_API_KEY:"fal-private-test-secret"});
+  for(const key of ["flux2photo","fooocusphoto"]) {
+    const before=h.requests.length;
+    const result=await h.run(`generateWithModel(${JSON.stringify(key)},"1k","a natural photo of a 34 year old adult","sq")`);
+    assert.equal(result.url,"https://fal.media/files/photo.png");
+    const calls=h.requests.slice(before);
+    assert.equal(calls.filter(c=>c.options.method==="POST").length,1,"never double-create");
+    const post=calls.find(c=>c.options.method==="POST");
+    assert.equal(post.options.headers.Authorization,"Key fal-private-test-secret");
+    const input=JSON.parse(post.options.body);
+    assert.equal(input.prompt,"a natural photo of a 34 year old adult");
+    assert.equal(input.enable_safety_checker,false);
+    assert.equal(input.num_images,1);
+    if(key==="flux2photo") {
+      assert.equal(post.url,"https://queue.fal.run/fal-ai/flux-2");
+      assert.equal(input.image_size.width,1024);
+      assert.equal(input.image_size.height,1024);
+      assert.equal(input.enable_prompt_expansion,false);
+      assert.equal(input.guidance_scale,2.5);
+      assert.equal(input.num_inference_steps,30);
+    } else {
+      assert.equal(post.url,"https://queue.fal.run/fal-ai/fooocus");
+      assert.equal(input.aspect_ratio,"1024x1024");
+      assert.equal(input.performance,"Quality");
+      assert.equal(input.refiner_model,"None");
+      assert.match(input.negative_prompt,/plastic skin/);
+      assert.match(input.negative_prompt,/underage/);
+    }
+  }
+  assert.ok(!JSON.stringify(h.logs).includes("fal-private-test-secret"));
+});
+
+test("FAL photoreal failed job does not create another prediction or leak provider responses", async () => {
+  const h=boot(async (url, options)=>{
+    const data=options.method==="POST"?
+      {request_id:"job1234",status_url:url+"/requests/job1234/status"}:
+      {status:"FAILED",detail:"private studio prompt repeated in unsafe log"};
+    return {ok:true,status:200,text:async()=>JSON.stringify(data)};
+  },{FAL_API_KEY:"fal-private-test-secret"});
+  await assert.rejects(h.run('generateWithModel("flux2photo","1k","private studio prompt","sq")'),
+    /provider_failure/);
+  assert.equal(h.requests.filter(r=>r.options.method==="POST").length,1);
+  assert.ok(!JSON.stringify(h.logs).includes("private studio prompt repeated"));
+  assert.ok(!JSON.stringify(h.logs).includes("fal-private-test-secret"));
+});
+
+test("Runware 9B low-filter test uses a separate safety flag without modifying the standard 9B route",async()=>{
+  const h=boot(success);
+  await h.run('generateWithModel("flux2klein9blf","1k","an adult studio portrait","sq")');
+  const experimental=JSON.parse(h.requests.at(-1).options.body)[0];
+  assert.equal(experimental.model,"runware:400@2");
+  assert.deepEqual(experimental.safety,{checkContent:false});
+  assert.equal(experimental.width,1024);
+  assert.equal(experimental.height,1024);
+  await h.run('generateWithModel("flux2klein9b","1k","an adult studio portrait","sq")');
+  const standard=JSON.parse(h.requests.at(-1).options.body)[0];
+  assert.equal(standard.model,"runware:400@2");
+  assert.equal(standard.safety,undefined);
+  assert.equal(h.requests.length,2);
 });
