@@ -212,6 +212,14 @@ const MODELS = {
     qualities: { "1k": { cost: 0 } },
     engines: { primary: "replicate_realvisxl4", backup: null }
   },
+  naturalskinxl: {
+    key: "naturalskinxl",
+    label: "📷 Natural Skin XL • RealVis V4 API Test",
+    type: "t2i",
+    adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_natural_skin_v4", backup: null }
+  },
   seedream50prouc: {
     key: "seedream50prouc",
     label: "🧪 Seedream 5.0 Pro • Experimental",
@@ -314,6 +322,7 @@ const IMAGE_CREDIT_RATES = {
   realismxl: { "1k": 10 },
   juggernautxl7: { "1k": 10 },
   realvisxl4: { "1k": 10 },
+  naturalskinxl: { "1k": 10 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2256,6 +2265,28 @@ const REPLICATE_PONY = {
     version: "194f6c32973b10beafa727f3b3a5a9e9336f0656ea6d1a0e25586f4a6865124d",
     input: { num_inference_steps: 30, guidance_scale: 7, scheduler: "DDIM",
       number_picture: 1 }
+  },
+  replicate_natural_skin_v4: {
+    // Separate admin-only experiment; DO NOT change the locked Realism XL route.
+    // Replicate's published adirik/realvisxl-v4.0 schema supports this API-only
+    // safety-checker parameter. This is not a guarantee of unrestricted output.
+    version: "85a58cc71587cc27539b7c83eb1ce4aea02feedfb9a9fae0598cebc110a3d695",
+    randomSeedByOmission: true,
+    input: {
+      num_outputs: 1,
+      num_inference_steps: 30,
+      guidance_scale: 2.5,
+      scheduler: "DPM++_SDE_Karras",
+      refine: "no_refiner",
+      apply_watermark: false,
+      disable_safety_checker: true
+    },
+    negativePrompt: [
+      "child", "minor", "underage", "young-looking", "nonconsensual", "sexual violence",
+      "CGI", "3d render", "illustration", "cartoon", "waxy skin", "plastic skin",
+      "airbrushed skin", "oversmoothed skin", "beauty filter", "exaggerated proportions",
+      "bad anatomy", "malformed hands", "extra fingers", "blurred features"
+    ].join(", ")
   }
 };
 function replicatePonySize(ratioKey) {
@@ -2289,7 +2320,8 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey, extra
       ...(config.version ? { version: config.version } : {}),
       input: {
         ...config.input, ...replicatePonySize(ratioKey),
-        prompt, negative_prompt: "child, minor, underage, young-looking, nonconsensual, sexual violence",
+        prompt, negative_prompt: config.negativePrompt ||
+          "child, minor, underage, young-looking, nonconsensual, sexual violence",
         ...(config.input.num_outputs || config.input.number_picture ? {} : { batch_size: 1 }),
         ...(config.randomSeedByOmission ? {} : { seed: -1 })
       }
@@ -3487,6 +3519,7 @@ function uncensoredImageKeyboard() {
       [{ text: "🧪 Realism XL • Replicate", callback_data: "m:realismxl" }],
       [{ text: "🧪 Juggernaut XL v7 • Replicate", callback_data: "m:juggernautxl7" }],
       [{ text: "🧪 RealVisXL4 • Replicate", callback_data: "m:realvisxl4" }],
+      [{ text: "📷 Natural Skin XL • Low-filter API test", callback_data: "m:naturalskinxl" }],
       [
         { text: "⬅️ Back", callback_data: "mode:image" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
@@ -3799,6 +3832,7 @@ async function cmdModels(
       "Realism XL (Replicate) • 1K",
       "Juggernaut XL v7 (Replicate) • 1K",
       "RealVisXL4 (Replicate) • 1K",
+      "Natural Skin XL (RealVisXL V4 API; low-filter test) • 1K",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
