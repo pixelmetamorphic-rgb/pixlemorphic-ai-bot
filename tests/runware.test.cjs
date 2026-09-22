@@ -509,3 +509,61 @@ test("admin gets safe Replicate HTTP diagnostics and no duplicate billable reque
   assert.ok(!JSON.stringify(h.context.messages).includes("replicate-test-secret"));
   assert.ok(h.context.messages.some(x=>x.includes("credits were not charged")));
 });
+
+test("Natural Skin XL uses the published RealVisXL V4 API-only checker field without changing locked Realism XL", async () => {
+  const h = boot(async () => ok({
+    id: "abcd1234", status: "succeeded",
+    urls: { get: "https://api.replicate.com/v1/predictions/abcd1234" },
+    output: ["https://replicate.delivery/natural.png"]
+  }), { REPLICATE_API_TOKEN: "replicate-test-secret" });
+  const privateMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
+  assert.ok(privateMenu.includes("m:naturalskinxl"));
+  assert.ok(!h.run("JSON.stringify(imageKeyboard(123))").includes("naturalskinxl"));
+  assert.equal(await h.run('canAccess(123,"naturalskinxl")'), false);
+  assert.equal(await h.run('canAccess("1078816855","naturalskinxl")'), true);
+  const model = h.run('MODELS.naturalskinxl');
+  assert.equal(model.adminOnly, true);
+  assert.equal(model.qualities["1k"].cost, 10);
+  const response = await h.run('generateWithModel("naturalskinxl","1k","photograph of an adult person in daylight","sq")');
+  assert.equal(response.url, "https://replicate.delivery/natural.png");
+  assert.equal(h.requests.length, 1);
+  const req = h.requests[0];
+  assert.equal(req.url, "https://api.replicate.com/v1/predictions");
+  assert.equal(req.options.headers.Authorization, "Bearer replicate-test-secret");
+  const body = JSON.parse(req.options.body);
+  assert.equal(body.version, "85a58cc71587cc27539b7c83eb1ce4aea02feedfb9a9fae0598cebc110a3d695");
+  assert.equal(body.input.disable_safety_checker, true);
+  assert.equal(body.input.guidance_scale, 2.5);
+  assert.equal(body.input.scheduler, "DPM++_SDE_Karras");
+  assert.equal(body.input.num_inference_steps, 30);
+  assert.equal(body.input.num_outputs, 1);
+  assert.equal(body.input.seed, undefined);
+  assert.equal(body.input.batch_size, undefined);
+  assert.equal(body.input.width, 1024);
+  assert.equal(body.input.height, 1024);
+  assert.match(body.input.negative_prompt, /plastic skin/);
+  assert.match(body.input.negative_prompt, /underage/);
+  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
+
+  const old = h.requests.length;
+  await h.run('generateWithModel("realismxl","1k","an adult portrait","sq")');
+  assert.equal(h.requests.length - old, 1);
+  const lockedBody = JSON.parse(h.requests.at(-1).options.body);
+  assert.equal(lockedBody.version, "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
+  assert.equal(lockedBody.input.disable_safety_checker, undefined);
+  assert.equal(lockedBody.input.guidance_scale, 7);
+});
+
+test("Natural Skin XL provider error is diagnosed without resubmitting or changing bot credits", async () => {
+  const h = boot(async () => ({
+    ok: false, status: 422,
+    json: async () => ({detail:"invalid input; internal user prompt was filtered"})
+  }), { REPLICATE_API_TOKEN:"replicate-test-secret" });
+  await assert.rejects(
+    h.run('generateWithModel("naturalskinxl","1k","an adult studio portrait","sq")'),
+    /HTTP 422/
+  );
+  assert.equal(h.requests.filter(r => r.options.method === "POST").length, 1);
+  assert.ok(h.logs.some(l => l[0] === "replicate_create_failure"));
+  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
+});
