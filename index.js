@@ -183,6 +183,31 @@ const MODELS = {
     qualities: { "1k": { cost: 0 } },
     engines: { primary: "replicate_cyber_pony_v8", backup: null }
   },
+  ponysdxl: {
+    key: "ponysdxl", label: "🧪 Pony SDXL • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_pony_sdxl", backup: null }
+  },
+  noobaireal01: {
+    key: "noobaireal01", label: "🧪 NoobAI Real SDXL v0.1 • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_noobai_real_v01", backup: null }
+  },
+  realismxl: {
+    key: "realismxl", label: "🧪 Realism XL • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_realism_xl", backup: null }
+  },
+  juggernautxl7: {
+    key: "juggernautxl7", label: "🧪 Juggernaut XL v7 • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_juggernaut_xl_v7", backup: null }
+  },
+  realvisxl4: {
+    key: "realvisxl4", label: "🧪 RealVisXL4 • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_realvisxl4", backup: null }
+  },
   seedream50prouc: {
     key: "seedream50prouc",
     label: "🧪 Seedream 5.0 Pro • Experimental",
@@ -280,6 +305,11 @@ const IMAGE_CREDIT_RATES = {
   seedream50prouc: { "1k": 15, "2k": 25 },
   ponyrealism23: { "1k": 10 },
   cyberpony8: { "1k": 10 },
+  ponysdxl: { "1k": 10 },
+  noobaireal01: { "1k": 10 },
+  realismxl: { "1k": 10 },
+  juggernautxl7: { "1k": 10 },
+  realvisxl4: { "1k": 10 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2192,6 +2222,34 @@ const REPLICATE_PONY = {
     input: { model: "CyberRealisticPony", steps: 30, cfg_scale: 7,
       scheduler: "Euler a", clip_skip: 2, pag_scale: 0,
       guidance_rescale: 2, prepend_preprompt: false }
+  },
+  replicate_pony_sdxl: {
+    version: "b070dedae81324788c3c933a5d9e1270093dc74636214b9815dae044b4b3a58a",
+    input: { model: "mklannsfwrealxl2.safetensors", vae: "sdxl-vae-fp16-fix",
+      steps: 35, cfg_scale: 7, scheduler: "DPM++ 2M SDE Karras",
+      guidance_rescale: 0.7, prepend_preprompt: true }
+  },
+  replicate_noobai_real_v01: {
+    version: "06301c13e13b5d6cc7501827f20f3519ef25718edc556df0a5825016439e9346",
+    input: { model: "NoobAI-Realism-SDXL-v0.1", vae: "default",
+      steps: 30, cfg_scale: 5, clip_skip: 2, scheduler: "DPM++ 2M SDE Karras",
+      prepend_preprompt: true }
+  },
+  replicate_realism_xl: {
+    // Version-independent Replicate official-model endpoint selects the current version.
+    owner: "asiryan", name: "realism-xl",
+    input: { num_inference_steps: 30, guidance_scale: 7,
+      scheduler: "K_EULER_ANCESTRAL", num_outputs: 1 }
+  },
+  replicate_juggernaut_xl_v7: {
+    version: "6a52feace43ce1f6bbc2cdabfc68423cb2319d7444a1a1dae529c5e88b976382",
+    input: { num_inference_steps: 40, guidance_scale: 7,
+      scheduler: "K_EULER_ANCESTRAL", num_outputs: 1 }
+  },
+  replicate_realvisxl4: {
+    version: "194f6c32973b10beafa727f3b3a5a9e9336f0656ea6d1a0e25586f4a6865124d",
+    input: { num_inference_steps: 30, guidance_scale: 7, scheduler: "DDIM",
+      number_picture: 1 }
   }
 };
 function replicatePonySize(ratioKey) {
@@ -2213,18 +2271,22 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
     throw new Error("Unsupported Pony configuration");
   }
   const config = REPLICATE_PONY[engine];
-  const create = await fetch("https://api.replicate.com/v1/predictions", {
+  const createEndpoint = config.owner
+    ? `https://api.replicate.com/v1/models/${config.owner}/${config.name}/predictions`
+    : "https://api.replicate.com/v1/predictions";
+  const create = await fetch(createEndpoint, {
     method: "POST",
     headers: {
       Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
       "Content-Type": "application/json"
     },
     body: JSON.stringify({
-      version: config.version,
+      ...(config.version ? { version: config.version } : {}),
       input: {
         ...config.input, ...replicatePonySize(ratioKey),
         prompt, negative_prompt: "child, minor, underage, young-looking, nonconsensual, sexual violence",
-        batch_size: 1, seed: -1
+        ...(config.input.num_outputs || config.input.number_picture ? {} : { batch_size: 1 }),
+        seed: -1
       }
     })
   });
@@ -3382,18 +3444,11 @@ function uncensoredImageKeyboard() {
     inline_keyboard: [
       [{ text: "🧪 Pony Realism v2.3 • Replicate", callback_data: "m:ponyrealism23" }],
       [{ text: "🧪 CyberRealistic Pony v8 • Replicate", callback_data: "m:cyberpony8" }],
-      [
-        {
-          text: "🧪 FLUX.2 Klein 4B • Unverified",
-          callback_data: "m:flux2klein4buc"
-        }
-      ],
-      [
-        {
-          text: "🧪 Seedream 5 Pro • Rejected in test",
-          callback_data: "m:seedream50prouc"
-        }
-      ],
+      [{ text: "🧪 Pony SDXL • Replicate", callback_data: "m:ponysdxl" }],
+      [{ text: "🧪 NoobAI Real SDXL v0.1 • Replicate", callback_data: "m:noobaireal01" }],
+      [{ text: "🧪 Realism XL • Replicate", callback_data: "m:realismxl" }],
+      [{ text: "🧪 Juggernaut XL v7 • Replicate", callback_data: "m:juggernautxl7" }],
+      [{ text: "🧪 RealVisXL4 • Replicate", callback_data: "m:realvisxl4" }],
       [
         { text: "⬅️ Back", callback_data: "mode:image" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
@@ -3701,8 +3756,11 @@ async function cmdModels(
       "🧪 ADULT IMAGE • EXPERIMENTAL",
       "Pony Realism v2.3 (Replicate) • 1K",
       "CyberRealistic Pony v8 (Replicate) • 1K",
-      "FLUX.2 [klein] 4B • 1K / 2K (unverified)",
-      "Seedream 5.0 Pro • 1K / 2K (rejected in adult test)",
+      "Pony SDXL (Replicate) • 1K",
+      "NoobAI Real SDXL v0.1 (Replicate) • 1K",
+      "Realism XL (Replicate) • 1K",
+      "Juggernaut XL v7 (Replicate) • 1K",
+      "RealVisXL4 (Replicate) • 1K",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
