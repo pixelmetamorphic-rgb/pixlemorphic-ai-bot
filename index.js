@@ -149,7 +149,7 @@ const MODELS = {
   },
   flux2klein4buc: {
     key: "flux2klein4buc",
-    label: "🔥 FLUX.2 [klein] 4B • Uncensored",
+    label: "🧪 FLUX.2 [klein] 4B • Experimental",
     type: "t2i",
     adminOnly: true,
     uncensored: true,
@@ -173,9 +173,19 @@ const MODELS = {
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_seedream50pro", backup: null }
   },
+  ponyrealism23: {
+    key: "ponyrealism23", label: "🧪 Pony Realism v2.3 • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_pony_realism_v23", backup: null }
+  },
+  cyberpony8: {
+    key: "cyberpony8", label: "🧪 CyberRealistic Pony v8 • Replicate", type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "replicate_cyber_pony_v8", backup: null }
+  },
   seedream50prouc: {
     key: "seedream50prouc",
-    label: "🔥 Seedream 5.0 Pro • Uncensored",
+    label: "🧪 Seedream 5.0 Pro • Experimental",
     type: "t2i",
     adminOnly: true,
     uncensored: true,
@@ -268,6 +278,8 @@ const IMAGE_CREDIT_RATES = {
   seedream50lite: { "2k": 10 },
   seedream50pro: { "1k": 15, "2k": 25 },
   seedream50prouc: { "1k": 15, "2k": 25 },
+  ponyrealism23: { "1k": 10 },
+  cyberpony8: { "1k": 10 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2164,6 +2176,87 @@ async function falTopazUpscale(
 }
 
 /* =========================
+   REPLICATE PONY EXPERIMENTAL
+========================= */
+// Exact published Replicate version IDs; update only after checking official model API.
+// No automatic retry of prediction creation: uncertain network errors may already be billable.
+const REPLICATE_PONY = {
+  replicate_pony_realism_v23: {
+    version: "fc052d05249cf7a1657f004eddc1e5f50618aa11cb2df19b960c377ee8a7ceb3",
+    input: { model: "ponyRealism_V23.safetensors", steps: 35, cfg_scale: 7,
+      scheduler: "DPM++ 2M SDE Karras", guidance_rescale: 0.7,
+      prepend_preprompt: true }
+  },
+  replicate_cyber_pony_v8: {
+    version: "76125795acdc8610c8b2d0352e691735054f0fbf31e1a1ae46fbc51b4dcc9ab5",
+    input: { model: "CyberRealisticPony", steps: 30, cfg_scale: 7,
+      scheduler: "Euler a", clip_skip: 2, pag_scale: 0,
+      guidance_rescale: 2, prepend_preprompt: false }
+  }
+};
+function replicatePonySize(ratioKey) {
+  const sizes = {
+    sq: { width: 1024, height: 1024 },
+    "45": { width: 896, height: 1120 },
+    "34": { width: 896, height: 1152 },
+    "169": { width: 1280, height: 720 },
+    "916": { width: 720, height: 1280 }
+  };
+  if (!Object.prototype.hasOwnProperty.call(sizes, ratioKey)) {
+    throw new Error("Unsupported Pony ratio");
+  }
+  return sizes[ratioKey];
+}
+async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey) {
+  if (!REPLICATE_API_TOKEN) throw new Error("REPLICATE_API_TOKEN is not configured");
+  if (qualityKey !== "1k" || !REPLICATE_PONY[engine]) {
+    throw new Error("Unsupported Pony configuration");
+  }
+  const config = REPLICATE_PONY[engine];
+  const create = await fetch("https://api.replicate.com/v1/predictions", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${REPLICATE_API_TOKEN}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify({
+      version: config.version,
+      input: {
+        ...config.input, ...replicatePonySize(ratioKey),
+        prompt, negative_prompt: "child, minor, underage, young-looking, nonconsensual, sexual violence",
+        batch_size: 1, seed: -1
+      }
+    })
+  });
+  const created = await create.json();
+  if (!create.ok) throw new Error(`Replicate prediction creation failed (${create.status})`);
+  const pollingUrl = created.urls?.get;
+  if (!pollingUrl || !/^https:\/\/api\.replicate\.com\/v1\/predictions\/[a-z0-9]+$/i.test(pollingUrl)) {
+    throw new Error("Replicate prediction status URL missing or invalid");
+  }
+  let prediction = created;
+  for (let attempt = 0; attempt < 180; attempt++) {
+    if (prediction.status === "succeeded") {
+      const output = Array.isArray(prediction.output) ? prediction.output[0] : prediction.output;
+      if (typeof output !== "string" || !/^https:\/\//.test(output)) {
+        throw new Error("Replicate returned no image URL");
+      }
+      return { url: output, type: "image", ratio: getRatio(ratioKey).label };
+    }
+    if (["failed", "canceled"].includes(prediction.status)) {
+      throw new Error("Replicate prediction failed or was canceled");
+    }
+    await sleep(2000);
+    const poll = await fetch(pollingUrl, {
+      headers: { Authorization: `Bearer ${REPLICATE_API_TOKEN}` }
+    });
+    if (!poll.ok) throw new Error(`Replicate polling failed (${poll.status})`);
+    prediction = await poll.json();
+  }
+  throw new Error("Replicate prediction timed out; check provider job before retrying");
+}
+
+/* =========================
    REPLICATE SDXL
 ========================= */
 
@@ -3021,6 +3114,9 @@ async function runEngine(
   ratioKey,
   extra = {}
 ) {
+  if (Object.prototype.hasOwnProperty.call(REPLICATE_PONY, engine)) {
+    return replicatePonyGenerate(engine, prompt, qualityKey, ratioKey);
+  }
   if (Object.prototype.hasOwnProperty.call(RUNWARE_MODELS, engine)) {
     return runwareGenerate(engine, prompt, qualityKey, ratioKey, extra);
   }
@@ -3260,7 +3356,7 @@ function imageKeyboard(userId) {
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       ...(isAdmin(userId) ? [
-        [{ text: "🔥 UNCENSORED • ADMIN TEST", callback_data: "imgcat:uncensored" }],
+        [{ text: "🧪 ADULT IMAGE • EXPERIMENTAL", callback_data: "imgcat:uncensored" }],
         [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
@@ -3284,15 +3380,17 @@ function imageKeyboard(userId) {
 function uncensoredImageKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: "🧪 Pony Realism v2.3 • Replicate", callback_data: "m:ponyrealism23" }],
+      [{ text: "🧪 CyberRealistic Pony v8 • Replicate", callback_data: "m:cyberpony8" }],
       [
         {
-          text: "🔥 FLUX.2 Klein 4B • Fast",
+          text: "🧪 FLUX.2 Klein 4B • Unverified",
           callback_data: "m:flux2klein4buc"
         }
       ],
       [
         {
-          text: "🔥 Seedream 5 Pro • Premium",
+          text: "🧪 Seedream 5 Pro • Rejected in test",
           callback_data: "m:seedream50prouc"
         }
       ],
@@ -3524,7 +3622,7 @@ async function showUncensoredImageMenu(
 
   return sendMessage(
     chatId,
-    "🔥 UNCENSORED IMAGE • ADMIN TEST\n\n18+ adult creative testing only.\nProvider filtering is disabled only for these two test routes.\n\nChoose a model:",
+    "🧪 ADULT IMAGE • EXPERIMENTAL\n\nPrivate admin testing for lawful consenting-adult creative work. No model is verified unrestricted; provider restrictions still apply.\n\nChoose a model:",
     {
       reply_markup: uncensoredImageKeyboard()
     }
@@ -3600,9 +3698,11 @@ async function cmdModels(
     "",
     ...(isAdmin(userId) ? [
       "🧪 PRIVATE ADMIN TESTS",
-      "🔥 UNCENSORED IMAGE • ADMIN TEST",
-      "FLUX.2 [klein] 4B • 1K / 2K",
-      "Seedream 5.0 Pro • 1K / 2K",
+      "🧪 ADULT IMAGE • EXPERIMENTAL",
+      "Pony Realism v2.3 (Replicate) • 1K",
+      "CyberRealistic Pony v8 (Replicate) • 1K",
+      "FLUX.2 [klein] 4B • 1K / 2K (unverified)",
+      "Seedream 5.0 Pro • 1K / 2K (rejected in adult test)",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
