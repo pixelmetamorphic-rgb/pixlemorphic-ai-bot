@@ -1,5 +1,5 @@
 # PIXLEMORPHIC bot — continuation checkpoint
-Updated 2026-09-21. Read this and current index.js before continuing.
+Updated 2026-09-22. Read this and current index.js before continuing.
 
 ## User and rules
 Harsh; prefers concise Hinglish and autonomous implementation. Initial budget INR10,000. Telegram bot first, video integration and credit pricing before public launch/UI polish.
@@ -100,6 +100,18 @@ Don't claim cheapest worldwide, guaranteed profit, or all costs verified.
 Ideogram displays Native/Turbo.
 GPT high displays “High • up to4K”, caption requested pixel size; square2880x2880,4:5 2560x3200,3:4 2304x3072,landscape3840x2160,portrait2160x3840.
 8K explicitly upscale.
+
+## 2026-09-22 uncensored image admin-test integration
+Merged to main via PR #2, commit 7df73735df830ba3abbb36f130f1deb8ce3a5830.
+Added admin-only IMAGE STUDIO category: 🔥 UNCENSORED • ADMIN TEST.
+Dedicated Runware aliases:
+- FLUX.2 [klein] 4B => runware:400@4 => 1K/2K => safety.checkContent=false only on this alias.
+- Seedream 5.0 Pro => bytedance:seedream@5.0-pro => 1K/2K => safety.checkContent=false only on this alias.
+Existing regular FLUX/Seedream routes were not changed.
+Customer credit placeholders remain FLUX 2/2 and Seedream Pro 15/25; admin tests consume 0 bot credits but provider billing still applies.
+Health release changed to uncensored-image-admin-test-v1 and now exposes runware Boolean.
+No paid generation was executed during integration. Paid uncensored-behavior testing still requires explicit user authorization under the project rule.
+Syntax of merged main index.js was checked successfully.
 
 ## Pending work order
 1. Implement latest INR5000/2000 pack and update economics document. Keep current credit units unless user explicitly changes them.
