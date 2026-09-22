@@ -2240,8 +2240,10 @@ const REPLICATE_PONY = {
       prepend_preprompt: true }
   },
   replicate_realism_xl: {
-    // Version-independent Replicate official-model endpoint selects the current version.
-    owner: "asiryan", name: "realism-xl",
+    // asiryan/realism-xl is a community model: Replicate requires a pinned version.
+    // Public version page: /asiryan/realism-xl/versions/ff26a1f7...
+    version: "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219",
+    randomSeedByOmission: true,
     input: { num_inference_steps: 30, guidance_scale: 7,
       scheduler: "K_EULER_ANCESTRAL", num_outputs: 1 }
   },
@@ -2275,9 +2277,8 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey, extra
     throw new Error("Unsupported Pony configuration");
   }
   const config = REPLICATE_PONY[engine];
-  const createEndpoint = config.owner
-    ? `https://api.replicate.com/v1/models/${config.owner}/${config.name}/predictions`
-    : "https://api.replicate.com/v1/predictions";
+  // All seven configured versions are community models, not official deployments.
+  const createEndpoint = "https://api.replicate.com/v1/predictions";
   const create = await fetch(createEndpoint, {
     method: "POST",
     headers: {
@@ -2290,12 +2291,30 @@ async function replicatePonyGenerate(engine, prompt, qualityKey, ratioKey, extra
         ...config.input, ...replicatePonySize(ratioKey),
         prompt, negative_prompt: "child, minor, underage, young-looking, nonconsensual, sexual violence",
         ...(config.input.num_outputs || config.input.number_picture ? {} : { batch_size: 1 }),
-        seed: -1
+        ...(config.randomSeedByOmission ? {} : { seed: -1 })
       }
     })
   });
   const created = await create.json();
-  if (!create.ok) throw new Error(`Replicate prediction creation failed (${create.status})`);
+  if (!create.ok) {
+    // Never log raw provider errors: they may contain submitted prompts or credentials.
+    const providerText = [created?.detail, created?.error, created?.title]
+      .filter(v => typeof v === "string").join(" ").toLowerCase();
+    const category = /safety|moderation|nsfw|content policy/.test(providerText) ? "content_policy"
+      : /version|model not found|official model/.test(providerText) ? "model_or_version"
+      : /validation|invalid|input|schema/.test(providerText) ? "invalid_input"
+      : /balance|billing|payment|credit/.test(providerText) ? "billing"
+      : /permission|forbidden|unauthori[sz]ed|token/.test(providerText) ? "authorization"
+      : "unspecified";
+    console.error("replicate_create_failure", JSON.stringify({
+      engine, stage: "create", status: create.status, category
+    }));
+    const failure = new Error(`Replicate prediction creation failed (HTTP ${create.status})`);
+    failure.replicateStatus = create.status;
+    failure.replicateStage = "create";
+    failure.replicateCategory = category;
+    throw failure;
+  }
   const pollingUrl = created.urls?.get;
   if (!pollingUrl || !/^https:\/\/api\.replicate\.com\/v1\/predictions\/[a-z0-9]+$/i.test(pollingUrl)) {
     throw new Error("Replicate prediction status URL missing or invalid");
@@ -4043,6 +4062,12 @@ async function performGeneration(
         (error.message.includes("still processing") && redis
           ? "⏳ Replicate is still processing. Your prediction has been saved; the bot will check it and send the image if it completes. Please don't regenerate yet."
           : "❌ Generation failed.\n\nThe image could not be completed or delivered. Please try again later.") +
+        (isAdmin(userId) && error.replicateStage
+          ? `\n\n🛠 Admin diagnostic: Replicate ${error.replicateStage}` +
+            (error.replicateStatus ? ` HTTP ${error.replicateStatus}` : "") +
+            (error.replicateCategory ? ` • ${error.replicateCategory}` : "") +
+            ". Check Railway logs; don't rerun a pending prediction."
+          : "") +
         (charged
           ? "\n\nYour credit refund could not be confirmed. Please contact support."
           : "\n\nYour credits were not charged, or were automatically returned.")
