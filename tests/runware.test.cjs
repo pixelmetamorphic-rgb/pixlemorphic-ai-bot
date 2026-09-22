@@ -65,6 +65,35 @@ test("every selectable model exists after legacy cleanup", () => {
   }
 });
 
+test("uncensored image category is admin-only and disables Runware safety only on dedicated aliases", async () => {
+  const h = boot(success);
+  const publicMenu = h.run("JSON.stringify(imageKeyboard(123))");
+  const adminMenu = h.run(`JSON.stringify(imageKeyboard("${admin}"))`);
+  assert.ok(!publicMenu.includes("imgcat:uncensored"));
+  assert.ok(adminMenu.includes("imgcat:uncensored"));
+
+  const ucMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
+  assert.ok(ucMenu.includes("m:flux2klein4buc"));
+  assert.ok(ucMenu.includes("m:seedream50prouc"));
+
+  for (const [key, quality] of [["flux2klein4buc","1k"],["seedream50prouc","1k"]]) {
+    await h.run(`generateWithModel("${key}","${quality}","adult fashion portrait","sq")`);
+    const [task] = JSON.parse(h.requests.at(-1).options.body);
+    assert.deepEqual(task.safety, { checkContent: false });
+  }
+
+  for (const [key, quality] of [["flux2klein9b","1k"],["seedream50pro","1k"]]) {
+    await h.run(`generateWithModel("${key}","${quality}","fashion portrait","sq")`);
+    const [task] = JSON.parse(h.requests.at(-1).options.body);
+    assert.equal(task.safety, undefined);
+  }
+
+  assert.equal(await h.run('canAccess(123,"flux2klein4buc")'), false);
+  assert.equal(await h.run('canAccess(123,"seedream50prouc")'), false);
+  assert.equal(await h.run(`canAccess("${admin}","flux2klein4buc")`), true);
+  assert.equal(await h.run(`canAccess("${admin}","seedream50prouc")`), true);
+});
+
 test("8K master validates real PNG dimensions and submits exactly one upscale", async () => {
   for (const scenario of ["ok", "small-source", "small-output", "wrong-ratio", "failed-upscale", "invalid-png"]) {
     const calls = [];
