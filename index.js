@@ -214,11 +214,29 @@ const MODELS = {
   },
   naturalskinxl: {
     key: "naturalskinxl",
-    label: "📷 Natural Skin XL • RealVis V4 API Test",
+    label: "📷 Natural Skin XL • Archived poor-results test",
     type: "t2i",
     adminOnly: true,
     qualities: { "1k": { cost: 0 } },
     engines: { primary: "replicate_natural_skin_v4", backup: null }
+  },
+  flux2photo: {
+    key: "flux2photo", label: "📷 FLUX.2 Dev • FAL Photo Test",
+    type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "fal_flux2_photo", backup: null }
+  },
+  fooocusphoto: {
+    key: "fooocusphoto", label: "📷 Fooocus Quality • FAL Photo Test",
+    type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "fal_fooocus_photo", backup: null }
+  },
+  flux2klein9blf: {
+    key: "flux2klein9blf", label: "🧪 FLUX.2 Klein 9B • Runware Lower-filter Test",
+    type: "t2i", adminOnly: true,
+    qualities: { "1k": { cost: 0 } },
+    engines: { primary: "runware_flux2klein9b_lf", backup: null }
   },
   seedream50prouc: {
     key: "seedream50prouc",
@@ -323,6 +341,9 @@ const IMAGE_CREDIT_RATES = {
   juggernautxl7: { "1k": 10 },
   realvisxl4: { "1k": 10 },
   naturalskinxl: { "1k": 10 },
+  flux2photo: { "1k": 20 },
+  fooocusphoto: { "1k": 15 },
+  flux2klein9blf: { "1k": 2 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2088,6 +2109,72 @@ async function falFluxUltraRealism(
 }
 
 /* =========================
+   PHOTOREAL PRIVATE FAL EXPERIMENTS
+   Requested checker=false is subject to account authorization.
+   Neither route guarantees unrestricted content or photo fidelity.
+========================= */
+async function falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey) {
+  if (qualityKey !== "1k") throw new Error("Unsupported private photo quality");
+  const size = replicatePonySize(ratioKey);
+  let endpoint;
+  let input;
+  if (engine === "fal_flux2_photo") {
+    endpoint = "fal-ai/flux-2";
+    input = {
+      prompt,
+      image_size: size,
+      guidance_scale: 2.5,
+      num_inference_steps: 30,
+      num_images: 1,
+      acceleration: "regular",
+      enable_prompt_expansion: false,
+      enable_safety_checker: false,
+      output_format: "jpeg"
+    };
+  } else if (engine === "fal_fooocus_photo") {
+    endpoint = "fal-ai/fooocus";
+    input = {
+      prompt,
+      negative_prompt: "child, minor, underage, nonconsensual, sexual violence, " +
+        "CGI, 3D render, waxy skin, plastic skin, excessive beauty retouching, " +
+        "oversmoothed skin, distorted anatomy, extra fingers, fused hands, disfigured",
+      styles: ["Fooocus V2", "Fooocus Enhance"],
+      performance: "Quality",
+      guidance_scale: 4,
+      sharpness: 1,
+      aspect_ratio: size.width + "x" + size.height,
+      num_images: 1,
+      refiner_model: "None",
+      output_format: "jpeg",
+      enable_safety_checker: false
+    };
+  } else {
+    throw new Error("Unsupported private photo engine");
+  }
+  let result;
+  try {
+    // The queue provides one submission and polls that same paid job; no retries.
+    result = await falQueueRun(endpoint, input);
+  } catch (err) {
+    // Keep provider response bodies out of logs: they may repeat private prompts.
+    const code = /(?:FAL queue|FAL)\\s+(\\d{3})/.exec(String(err?.message || ""))?.[1];
+    const category = code === "401" || code === "403" ? "account_permission"
+      : code === "422" || code === "400" ? "input_or_policy"
+      : code === "429" ? "rate_limit"
+      : /timed out/.test(String(err?.message || "")) ? "timeout_or_pending"
+      : "provider_failure";
+    console.error("fal_private_photo_failed", JSON.stringify({ engine, code: code || null, category }));
+    throw new Error("FAL experimental photo failed: " + category +
+      (code ? " HTTP " + code : "") + ". Check provider authorization and task history before retrying.");
+  }
+  const url = pickFirstImageUrl(result);
+  if (typeof url !== "string" || !/^https:\/\//.test(url)) {
+    throw new Error("FAL experimental photo returned no usable image URL");
+  }
+  return { url, type: "image", ratio: getRatio(ratioKey).label };
+}
+
+/* =========================
    FAL FLUX PRO 8K
 ========================= */
 
@@ -3026,6 +3113,7 @@ async function falGPTImage2Generate(
 // Backend-only IDs. Customer rates are centralized; admin generations remain free in bot credits.
 const RUNWARE_MODELS = {
   runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
+  runware_flux2klein9b_lf: { model: "runware:400@2", steps: 4, safetyOff: true },
   runware_flux2klein4b_uc: { model: "runware:400@4", steps: 4, safetyOff: true },
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
   runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
@@ -3264,6 +3352,10 @@ async function runEngine(
         qualityKey,
         ratioKey
       );
+
+    case "fal_flux2_photo":
+    case "fal_fooocus_photo":
+      return falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey);
 
     case "fal_flux_ultra_realism":
       return falFluxUltraRealism(
@@ -3516,10 +3608,12 @@ function uncensoredImageKeyboard() {
       [{ text: "🧪 CyberRealistic Pony v8 • Replicate", callback_data: "m:cyberpony8" }],
       [{ text: "🧪 Pony SDXL • Replicate", callback_data: "m:ponysdxl" }],
       [{ text: "🧪 NoobAI Real SDXL v0.1 • Replicate", callback_data: "m:noobaireal01" }],
-      [{ text: "🧪 Realism XL • Replicate", callback_data: "m:realismxl" }],
+      [{ text: "✅ Realism XL • LOCKED", callback_data: "m:realismxl" }],
+      [{ text: "📷 FLUX.2 Dev • FAL Photo Test", callback_data: "m:flux2photo" }],
+      [{ text: "📷 Fooocus Quality • FAL Photo Test", callback_data: "m:fooocusphoto" }],
+      [{ text: "🧪 FLUX.2 Klein 9B • Runware Test", callback_data: "m:flux2klein9blf" }],
       [{ text: "🧪 Juggernaut XL v7 • Replicate", callback_data: "m:juggernautxl7" }],
       [{ text: "🧪 RealVisXL4 • Replicate", callback_data: "m:realvisxl4" }],
-      [{ text: "📷 Natural Skin XL • Low-filter API test", callback_data: "m:naturalskinxl" }],
       [
         { text: "⬅️ Back", callback_data: "mode:image" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
@@ -3832,7 +3926,10 @@ async function cmdModels(
       "Realism XL (Replicate) • 1K",
       "Juggernaut XL v7 (Replicate) • 1K",
       "RealVisXL4 (Replicate) • 1K",
-      "Natural Skin XL (RealVisXL V4 API; low-filter test) • 1K",
+      "FLUX.2 Dev FAL photo test • 1K (checker off request; approval unknown)",
+      "Fooocus Quality FAL photo test • 1K (checker off request; approval unknown)",
+      "FLUX.2 Klein 9B Runware lower-filter test • 1K",
+      "Natural Skin XL • archived poor-results route, hidden from menu",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
