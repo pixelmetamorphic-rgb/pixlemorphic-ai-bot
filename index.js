@@ -3023,14 +3023,14 @@ async function adminRunwareCatalog(chatId, args) {
     const result = await runwareCatalogSearch(term, arch);
     const lines = result.models.map(m =>
       [m.name, "AIR: " + m.air, "Architecture: " + m.architecture,
-        m.version ? "Version: " + m.version : ""].filter(Boolean).join("\\n"));
+        m.version ? "Version: " + m.version : ""].filter(Boolean).join("\n"));
     return sendMessage(chatId,
       "🔎 Runware live checkpoint catalog: " + term +
-      "\\nMatches: " + result.total +
-      "\\n\\n" + (lines.join("\\n\\n") || "No matches found.") +
-      "\\n\\nMetadata only; licensing, price and adult-use permission are NOT verified.");
+      "\nMatches: " + result.total +
+      "\n\n" + (lines.join("\n\n") || "No matches found.") +
+      "\n\nMetadata only; licensing, price and adult-use permission are NOT verified.");
   } catch (err) {
-    console.error("runware_catalog_error", String(err?.message || "").replace(/Bearer\\s+[^\\s]+/gi, "[redacted]").slice(0, 100));
+    console.error("runware_catalog_error", String(err?.message || "").replace(/Bearer\s+[^\s]+/gi, "[redacted]").slice(0, 100));
     return sendMessage(chatId, "Catalog search unavailable. No image generation was requested.");
   }
 }
