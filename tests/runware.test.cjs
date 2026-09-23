@@ -65,35 +65,26 @@ test("every selectable model exists after legacy cleanup", () => {
   }
 });
 
-test("uncensored image category is admin-only and disables Runware safety only on dedicated aliases", async () => {
-  const h = boot(success);
-  const publicMenu = h.run("JSON.stringify(imageKeyboard(123))");
-  const adminMenu = h.run(`JSON.stringify(imageKeyboard("${admin}"))`);
+test("research menu retains locked Realism XL and two Replicate Pony candidates only", async () => {
+  const h=boot(success);
+  const publicMenu=h.run("JSON.stringify(imageKeyboard(123))");
+  const adminMenu=h.run(`JSON.stringify(imageKeyboard("${admin}"))`);
+  const menu=h.run("JSON.stringify(uncensoredImageKeyboard())");
   assert.ok(!publicMenu.includes("imgcat:uncensored"));
   assert.ok(adminMenu.includes("imgcat:uncensored"));
-
-  const ucMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  const seven = ["ponyrealism23","cyberpony8","ponysdxl","noobaireal01","realismxl","juggernautxl7","realvisxl4"];
-  for (const key of seven) assert.ok(ucMenu.includes("m:" + key));
-  assert.ok(!ucMenu.includes("m:flux2klein4buc"));
-  assert.ok(!ucMenu.includes("m:seedream50prouc"));
-
-  for (const [key, quality] of [["flux2klein4buc","1k"],["seedream50prouc","1k"]]) {
-    await h.run(`generateWithModel("${key}","${quality}","adult fashion portrait","sq")`);
-    const [task] = JSON.parse(h.requests.at(-1).options.body);
-    assert.deepEqual(task.safety, { checkContent: false });
+  for(const key of ["realismxl","ponyrealism23","cyberpony8"]){
+    assert.ok(menu.includes("m:"+key));
+    assert.equal(await h.run(`canAccess(123,${JSON.stringify(key)})`),false);
+    assert.equal(await h.run(`canAccess("${admin}",${JSON.stringify(key)})`),true);
   }
-
-  for (const [key, quality] of [["flux2klein9b","1k"],["seedream50pro","1k"]]) {
-    await h.run(`generateWithModel("${key}","${quality}","fashion portrait","sq")`);
-    const [task] = JSON.parse(h.requests.at(-1).options.body);
-    assert.equal(task.safety, undefined);
+  for(const key of ["flux2klein4buc","seedream50prouc","ponysdxl","noobaireal01",
+    "juggernautxl7","realvisxl4","naturalskinxl","flux2photo","fooocusphoto","flux2klein9blf"]){
+    assert.equal(h.run(`MODELS[${JSON.stringify(key)}]`),undefined);
+    assert.ok(!menu.includes("m:"+key));
+    assert.ok(!adminMenu.includes("m:"+key));
   }
-
-  assert.equal(await h.run('canAccess(123,"flux2klein4buc")'), false);
-  assert.equal(await h.run('canAccess(123,"seedream50prouc")'), false);
-  assert.equal(await h.run(`canAccess("${admin}","flux2klein4buc")`), true);
-  assert.equal(await h.run(`canAccess("${admin}","seedream50prouc")`), true);
+  assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
+    "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
 });
 
 test("8K master validates real PNG dimensions and submits exactly one upscale", async () => {
@@ -418,269 +409,71 @@ test("reserve before provider call, stop if reservation fails, refund without ov
   assert.equal(h.values.get('u:123:credits'),150);
 });
 
-// Replicate integration tests: use mocked HTTP only and do not create billable predictions.
-test("seven Replicate 1K models are admin-only, use the correct API schema, and create exactly one prediction", async () => {
-  const engines = ["ponyrealism23","cyberpony8","ponysdxl","noobaireal01","realismxl","juggernautxl7","realvisxl4"];
-  const h = boot(async () => ok({
-    id: "abcd1234", status: "succeeded",
-    urls: { get: "https://api.replicate.com/v1/predictions/abcd1234" },
-    output: ["https://replicate.delivery/result.png"]
-  }), { REPLICATE_API_TOKEN: "replicate-test-secret" });
-  const menu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  for (const key of engines) {
-    assert.equal(await h.run(`canAccess(123,"${key}")`), false);
-    assert.equal(await h.run(`canAccess("${admin}","${key}")`), true);
-    assert.ok(!h.run("JSON.stringify(imageKeyboard(123))").includes(key));
-    assert.ok(menu.includes("m:" + key));
-    const model = h.run(`MODELS["${key}"]`);
-    assert.deepEqual(Object.keys(model.qualities), ["1k"]);
-    assert.equal(model.adminOnly, true);
-    assert.equal(model.qualities["1k"].cost, 10);
-    const before = h.requests.length;
-    const output = await h.run(`generateWithModel("${key}","1k","adult fashion studio portrait","sq")`);
-    assert.equal(output.url, "https://replicate.delivery/result.png");
-    assert.equal(h.requests.length - before, 1);
-    const req = h.requests.at(-1);
-    assert.match(req.url, /^https:\/\/api\.replicate\.com\/v1\//);
-    assert.equal(req.options.headers.Authorization, "Bearer replicate-test-secret");
-    const body = JSON.parse(req.options.body);
-    assert.equal(body.input.width, 1024);
-    assert.equal(body.input.height, 1024);
-    assert.equal(body.input.prompt, "adult fashion studio portrait");
-    assert.match(body.input.negative_prompt, /minor/);
-    assert.equal(req.url, "https://api.replicate.com/v1/predictions");
-    assert.match(body.version, /^[a-f0-9]{64}$/);
-    if (key === "realismxl") {
-      assert.equal(body.version, "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
-      assert.equal(body.input.seed, undefined); // Provider randomizes if seed is omitted.
-      assert.equal(body.input.batch_size, undefined); // Uses num_outputs=1.
-      assert.equal(body.input.num_outputs, 1);
-    }
-  }
-  assert.ok(!menu.includes("flux2klein4buc") && !menu.includes("seedream50prouc"));
-  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
-});
-
-test("Replicate failures do not resubmit a potentially billed prediction", async () => {
-  for (const response of [
-    () => ({ok:false,status:503,json:async()=>({detail:"upstream"})}),
-    () => { throw new Error("unknown network result"); },
-    () => ok({id:"abcd1234",status:"succeeded",output:[],urls:{get:"https://api.replicate.com/v1/predictions/abcd1234"}})
-  ]) {
-    const h=boot(response,{REPLICATE_API_TOKEN:"replicate-test-secret"});
-    await assert.rejects(h.run('generateWithModel("realvisxl4","1k","a landscape","sq")'));
-    assert.equal(h.requests.filter(r=>r.options.method==="POST" && r.url.includes("replicate.com")).length,1);
-    assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
-  }
-});
-
-test("Replicate menu navigation and denied non-admin callbacks do not trigger provider requests", async () => {
-  const h=boot(async()=>{ throw Error("should not be called"); },{REPLICATE_API_TOKEN:"replicate-test-secret"});
-  h.context.messages=[];
-  h.run("sendMessage = async (_chat,text) => messages.push(text)");
-  await h.run('performGeneration(123,123,"ponysdxl","1k","sq","a portrait")');
-  assert.equal(h.requests.length,0);
-  assert.ok(h.context.messages.some(x=>x.includes("not available")));
-});
-
-test("Replicate creation HTTP errors are classified without exposing prompt or credentials", async () => {
-  const confidentialPrompt = "a private portrait prompt used only in testing";
-  const h = boot(async () => ({ok:false,status:422,json:async () => ({
-    detail:"invalid input schema; private portrait prompt used only in testing"
-  })}), {REPLICATE_API_TOKEN:"replicate-test-secret"});
-  await assert.rejects(h.run(`generateWithModel("realismxl","1k",${JSON.stringify(confidentialPrompt)},"sq")`), /HTTP 422/);
-  assert.equal(h.requests.length,1);
-  assert.equal(h.requests[0].url,"https://api.replicate.com/v1/predictions");
-  const output = JSON.stringify(h.logs);
-  assert.ok(output.includes('replicate_create_failure'));
-  assert.ok(output.includes('invalid_input'));
-  assert.ok(!output.includes(confidentialPrompt));
-  assert.ok(!output.includes("replicate-test-secret"));
-});
-
-test("admin gets safe Replicate HTTP diagnostics and no duplicate billable request", async () => {
-  const h=boot(async()=>({ok:false,status:404,json:async()=>({detail:"model not found"})}),
-    {REPLICATE_API_TOKEN:"replicate-test-secret"});
-  h.context.messages=[];
-  h.run("sendMessage = async (_chat,text) => messages.push(text)");
-  await h.run(`performGeneration("${admin}","${admin}","realismxl","1k","sq","a portrait")`);
-  assert.equal(h.requests.filter(x=>x.url==="https://api.replicate.com/v1/predictions").length,1);
-  assert.ok(h.context.messages.some(x=>x.includes("HTTP 404") && x.includes("model_or_version")));
-  assert.ok(!JSON.stringify(h.context.messages).includes("replicate-test-secret"));
-  assert.ok(h.context.messages.some(x=>x.includes("credits were not charged")));
-});
-
-test("Natural Skin XL uses the published RealVisXL V4 API-only checker field without changing locked Realism XL", async () => {
-  const h = boot(async () => ok({
-    id: "abcd1234", status: "succeeded",
-    urls: { get: "https://api.replicate.com/v1/predictions/abcd1234" },
-    output: ["https://replicate.delivery/natural.png"]
-  }), { REPLICATE_API_TOKEN: "replicate-test-secret" });
-  const privateMenu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  assert.ok(!privateMenu.includes("m:naturalskinxl")); // User rejected this model; backend remains for audit only.
-  assert.ok(!h.run("JSON.stringify(imageKeyboard(123))").includes("naturalskinxl"));
-  assert.equal(await h.run('canAccess(123,"naturalskinxl")'), false);
-  assert.equal(await h.run('canAccess("1078816855","naturalskinxl")'), true);
-  const model = h.run('MODELS.naturalskinxl');
-  assert.equal(model.adminOnly, true);
-  assert.equal(model.qualities["1k"].cost, 10);
-  const response = await h.run('generateWithModel("naturalskinxl","1k","photograph of an adult person in daylight","sq")');
-  assert.equal(response.url, "https://replicate.delivery/natural.png");
-  assert.equal(h.requests.length, 1);
-  const req = h.requests[0];
-  assert.equal(req.url, "https://api.replicate.com/v1/predictions");
-  assert.equal(req.options.headers.Authorization, "Bearer replicate-test-secret");
-  const body = JSON.parse(req.options.body);
-  assert.equal(body.version, "85a58cc71587cc27539b7c83eb1ce4aea02feedfb9a9fae0598cebc110a3d695");
-  assert.equal(body.input.disable_safety_checker, true);
-  assert.equal(body.input.guidance_scale, 2.5);
-  assert.equal(body.input.scheduler, "DPM++_SDE_Karras");
-  assert.equal(body.input.num_inference_steps, 30);
-  assert.equal(body.input.num_outputs, 1);
-  assert.equal(body.input.seed, undefined);
-  assert.equal(body.input.batch_size, undefined);
-  assert.equal(body.input.width, 1024);
-  assert.equal(body.input.height, 1024);
-  assert.match(body.input.negative_prompt, /plastic skin/);
-  assert.match(body.input.negative_prompt, /underage/);
-  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
-
-  const old = h.requests.length;
-  await h.run('generateWithModel("realismxl","1k","an adult portrait","sq")');
-  assert.equal(h.requests.length - old, 1);
-  const lockedBody = JSON.parse(h.requests.at(-1).options.body);
-  assert.equal(lockedBody.version, "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
-  assert.equal(lockedBody.input.disable_safety_checker, undefined);
-  assert.equal(lockedBody.input.guidance_scale, 7);
-});
-
-test("Natural Skin XL provider error is diagnosed without resubmitting or changing bot credits", async () => {
-  const h = boot(async () => ({
-    ok: false, status: 422,
-    json: async () => ({detail:"invalid input; internal user prompt was filtered"})
-  }), { REPLICATE_API_TOKEN:"replicate-test-secret" });
-  await assert.rejects(
-    h.run('generateWithModel("naturalskinxl","1k","an adult studio portrait","sq")'),
-    /HTTP 422/
-  );
-  assert.equal(h.requests.filter(r => r.options.method === "POST").length, 1);
-  assert.ok(h.logs.some(l => l[0] === "replicate_create_failure"));
-  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
-});
-
-test("three new photoreal experiments are private; failed Natural Skin is hidden while Realism XL is locked", async () => {
-  const h = boot(success);
-  const menu = h.run("JSON.stringify(uncensoredImageKeyboard())");
-  const publicMenu = h.run("JSON.stringify(imageKeyboard(123))");
-  for (const key of ["flux2photo","fooocusphoto","flux2klein9blf"]) {
-    if (key === "flux2klein9blf") {
-      assert.ok(menu.includes("m:" + key));
-    } else {
-      assert.ok(!menu.includes("m:" + key),"FAL forbids explicit content; do not list in adult research");
-      assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes(key),
-        "compliant photography test remains in regular admin menu");
-    }
-    assert.ok(!publicMenu.includes(key));
-    assert.equal(await h.run(`canAccess(123,${JSON.stringify(key)})`), false);
-    assert.equal(await h.run(`canAccess("${admin}",${JSON.stringify(key)})`), true);
-    assert.deepEqual(Object.keys(h.run(`MODELS[${JSON.stringify(key)}].qualities`)), ["1k"]);
-  }
-  assert.ok(!menu.includes("m:naturalskinxl"));
-  assert.ok(!menu.includes("m:flux2photo"));
-  assert.ok(!menu.includes("m:fooocusphoto"));
-  assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes("m:flux2photo"));
-  assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes("m:fooocusphoto"));
-  assert.ok(h.run("MODELS.naturalskinxl"));
-  assert.ok(menu.includes("m:realismxl"));
-  assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
-    "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
-});
-
-test("FAL photoreal variants submit one paid job each with documented photo settings", async () => {
-  const h=boot(async (url, options) => {
-    let data;
-    if(options.method==="POST") {
-      data={request_id:"job1234",
-        status_url:url+"/requests/job1234/status",
-        response_url:url+"/requests/job1234"};
-    } else if(url.endsWith("/status")) {
-      data={status:"COMPLETED"};
-    } else {
-      data={images:[{url:"https://fal.media/files/photo.png"}]};
-    }
-    return {ok:true,status:200,text:async()=>JSON.stringify(data)};
-  },{FAL_API_KEY:"fal-private-test-secret"});
-  for(const key of ["flux2photo","fooocusphoto"]) {
+// Only three retained Replicate models; offline mocks create no billed predictions.
+test("locked Realism XL and two Pony candidates submit one pinned Replicate prediction each",async()=>{
+  const h=boot(async()=>ok({id:"abcd1234",status:"succeeded",
+    urls:{get:"https://api.replicate.com/v1/predictions/abcd1234"},
+    output:["https://replicate.delivery/result.png"]}),{REPLICATE_API_TOKEN:"replicate-test-secret"});
+  for(const key of ["realismxl","ponyrealism23","cyberpony8"]){
     const before=h.requests.length;
-    const result=await h.run(`generateWithModel(${JSON.stringify(key)},"1k","a natural photo of a 34 year old adult","sq")`);
-    assert.equal(result.url,"https://fal.media/files/photo.png");
-    const calls=h.requests.slice(before);
-    assert.equal(calls.filter(c=>c.options.method==="POST").length,1,"never double-create");
-    const post=calls.find(c=>c.options.method==="POST");
-    assert.equal(post.options.headers.Authorization,"Key fal-private-test-secret");
-    const input=JSON.parse(post.options.body);
-    assert.equal(input.prompt,"a natural photo of a 34 year old adult");
-    assert.equal(input.enable_safety_checker,true,"fal AUP prohibits explicit content; keep checks on");
-    assert.equal(input.num_images,1);
-    if(key==="flux2photo") {
-      assert.equal(post.url,"https://queue.fal.run/fal-ai/flux-2");
-      assert.equal(input.image_size.width,1024);
-      assert.equal(input.image_size.height,1024);
-      assert.equal(input.enable_prompt_expansion,false);
-      assert.equal(input.guidance_scale,2.5);
-      assert.equal(input.num_inference_steps,30);
-    } else {
-      assert.equal(post.url,"https://queue.fal.run/fal-ai/fooocus");
-      assert.equal(input.aspect_ratio,"1024x1024");
-      assert.equal(input.performance,"Quality");
-      assert.equal(input.refiner_model,"None");
-      assert.match(input.negative_prompt,/plastic skin/);
-      assert.match(input.negative_prompt,/underage/);
+    const output=await h.run(`generateWithModel(${JSON.stringify(key)},"1k","adult fashion portrait","sq")`);
+    assert.equal(output.url,"https://replicate.delivery/result.png");
+    assert.equal(h.requests.length-before,1);
+    const req=h.requests.at(-1);
+    assert.equal(req.url,"https://api.replicate.com/v1/predictions");
+    assert.equal(req.options.headers.Authorization,"Bearer replicate-test-secret");
+    const body=JSON.parse(req.options.body);
+    assert.match(body.version,/^[a-f0-9]{64}$/);
+    assert.equal(body.input.width,1024);
+    assert.equal(body.input.height,1024);
+    assert.match(body.input.negative_prompt,/minor/);
+    if(key==="realismxl"){
+      assert.equal(body.version,"ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
+      assert.equal(body.input.seed,undefined);
+      assert.equal(body.input.num_outputs,1);
     }
   }
-  assert.ok(!JSON.stringify(h.logs).includes("fal-private-test-secret"));
+  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
 });
 
-test("FAL photoreal failed job does not create another prediction or leak provider responses", async () => {
-  const h=boot(async (url, options)=>{
-    const data=options.method==="POST"?
-      {request_id:"job1234",status_url:url+"/requests/job1234/status"}:
-      {status:"FAILED",detail:"private studio prompt repeated in unsafe log"};
-    return {ok:true,status:200,text:async()=>JSON.stringify(data)};
-  },{FAL_API_KEY:"fal-private-test-secret"});
-  await assert.rejects(h.run('generateWithModel("flux2photo","1k","private studio prompt","sq")'),
-    /provider_failure/);
-  assert.equal(h.requests.filter(r=>r.options.method==="POST").length,1);
-  assert.ok(!JSON.stringify(h.logs).includes("private studio prompt repeated"));
-  assert.ok(!JSON.stringify(h.logs).includes("fal-private-test-secret"));
+test("Replicate failure does not retry or leak private prompt or token",async()=>{
+  const h=boot(async()=>({ok:false,status:422,json:async()=>({
+    detail:"invalid input; private user text should not appear in logs"
+  })}),{REPLICATE_API_TOKEN:"replicate-test-secret"});
+  await assert.rejects(h.run('generateWithModel("ponyrealism23","1k","private user text should not appear in logs","sq")'),/HTTP 422/);
+  assert.equal(h.requests.filter(x=>x.options.method==="POST").length,1);
+  assert.ok(!JSON.stringify(h.logs).includes("private user text should not appear in logs"));
+  assert.ok(!JSON.stringify(h.logs).includes("replicate-test-secret"));
 });
 
-test("Runware 9B low-filter test uses a separate safety flag without modifying the standard 9B route",async()=>{
-  const h=boot(success);
-  await h.run('generateWithModel("flux2klein9blf","1k","an adult studio portrait","sq")');
-  const experimental=JSON.parse(h.requests.at(-1).options.body)[0];
-  assert.equal(experimental.model,"runware:400@2");
-  assert.deepEqual(experimental.safety,{checkContent:false});
-  assert.equal(experimental.width,1024);
-  assert.equal(experimental.height,1024);
-  await h.run('generateWithModel("flux2klein9b","1k","an adult studio portrait","sq")');
-  const standard=JSON.parse(h.requests.at(-1).options.body)[0];
-  assert.equal(standard.model,"runware:400@2");
-  assert.equal(standard.safety,undefined);
-  assert.equal(h.requests.length,2);
+test("admin-only Runware catalog search submits modelSearch metadata tasks, never imageInference",async()=>{
+  const h=boot(async(url,options)=>ok({data:[{taskType:"modelSearch",
+    totalResults:1,results:[{name:"Sample Pony Checkpoint",air:"civitai:111@222",
+      architecture:"pony",version:"v1"}]}]}));
+  const result=await h.run('runwareCatalogSearch("pony","pony")');
+  assert.equal(result.total,1);
+  assert.equal(result.models[0].air,"civitai:111@222");
+  assert.equal(h.requests.length,1);
+  const req=h.requests[0];
+  assert.equal(req.url,"https://api.runware.ai/v1");
+  const tasks=JSON.parse(req.options.body);
+  assert.equal(tasks.length,1);
+  assert.equal(tasks[0].taskType,"modelSearch");
+  assert.equal(tasks[0].search,"pony");
+  assert.equal(tasks[0].architecture,"pony");
+  assert.equal(tasks[0].category,"checkpoint");
+  assert.equal(tasks[0].visibility,"public");
+  assert.ok(!JSON.stringify(tasks).includes("imageInference"));
+  await assert.rejects(h.run('runwareCatalogSearch("private customer prompt")'),/Unsupported/);
+  assert.equal(h.requests.length,1);
 });
 
-test("adult-model research makes no false commercial NSFW approval claims", async () => {
-  const h=boot(success);
-  const menu=JSON.stringify(h.run("uncensoredImageKeyboard()"));
-  const publicMenu=JSON.stringify(h.run("imageKeyboard(123)"));
-  const adminMenu=JSON.stringify(h.run(`imageKeyboard("${admin}")`));
-  assert.ok(!publicMenu.includes("imgcat:uncensored"));
-  assert.ok(adminMenu.includes("ADULT MODEL RESEARCH"));
-  assert.ok(!menu.includes("m:flux2photo"));
-  assert.ok(!menu.includes("m:fooocusphoto"));
-  assert.ok(!menu.includes("m:naturalskinxl"));
-  assert.ok(menu.includes("m:realismxl"));
-  assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
-    "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
+test("catalog search command is admin only; non-admin never sends provider request",async()=>{
+  const h=boot(async()=>{throw Error("provider should not be called");});
+  h.context.messages=[];
+  h.run("sendMessage=async(_chat,text)=>messages.push(text)");
+  await h.run('onMessage({chat:{id:123},from:{id:123},text:"/runwaremodels pony"})');
+  assert.equal(h.requests.length,0);
+  assert.ok(h.context.messages.length>=1,"non-admin receives normal bot response, not catalog data");
+  assert.ok(!h.context.messages.some(m=>String(m).includes("AIR:")));
 });

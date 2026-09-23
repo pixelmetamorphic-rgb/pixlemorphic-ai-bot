@@ -151,15 +151,6 @@ const MODELS = {
     qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
     engines: { primary: "runware_flux2klein9b", backup: null }
   },
-  flux2klein4buc: {
-    key: "flux2klein4buc",
-    label: "🧪 FLUX.2 [klein] 4B • Experimental",
-    type: "t2i",
-    adminOnly: true,
-    uncensored: true,
-    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
-    engines: { primary: "runware_flux2klein4b_uc", backup: null }
-  },
   seedream50lite: {
     key: "seedream50lite",
     label: "Seedream 5.0 Lite",
@@ -187,65 +178,10 @@ const MODELS = {
     qualities: { "1k": { cost: 0 } },
     engines: { primary: "replicate_cyber_pony_v8", backup: null }
   },
-  ponysdxl: {
-    key: "ponysdxl", label: "🧪 Pony SDXL • Replicate", type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "replicate_pony_sdxl", backup: null }
-  },
-  noobaireal01: {
-    key: "noobaireal01", label: "🧪 NoobAI Real SDXL v0.1 • Replicate", type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "replicate_noobai_real_v01", backup: null }
-  },
   realismxl: {
     key: "realismxl", label: "🧪 Realism XL • Replicate", type: "t2i", adminOnly: true,
     qualities: { "1k": { cost: 0 } },
     engines: { primary: "replicate_realism_xl", backup: null }
-  },
-  juggernautxl7: {
-    key: "juggernautxl7", label: "🧪 Juggernaut XL v7 • Replicate", type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "replicate_juggernaut_xl_v7", backup: null }
-  },
-  realvisxl4: {
-    key: "realvisxl4", label: "🧪 RealVisXL4 • Replicate", type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "replicate_realvisxl4", backup: null }
-  },
-  naturalskinxl: {
-    key: "naturalskinxl",
-    label: "📷 Natural Skin XL • Archived poor-results test",
-    type: "t2i",
-    adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "replicate_natural_skin_v4", backup: null }
-  },
-  flux2photo: {
-    key: "flux2photo", label: "📷 FLUX.2 Dev • FAL Photo Test",
-    type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "fal_flux2_photo", backup: null }
-  },
-  fooocusphoto: {
-    key: "fooocusphoto", label: "📷 Fooocus Quality • FAL Photo Test",
-    type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "fal_fooocus_photo", backup: null }
-  },
-  flux2klein9blf: {
-    key: "flux2klein9blf", label: "🧪 FLUX.2 Klein 9B • Runware Lower-filter Test",
-    type: "t2i", adminOnly: true,
-    qualities: { "1k": { cost: 0 } },
-    engines: { primary: "runware_flux2klein9b_lf", backup: null }
-  },
-  seedream50prouc: {
-    key: "seedream50prouc",
-    label: "🧪 Seedream 5.0 Pro • Experimental",
-    type: "t2i",
-    adminOnly: true,
-    uncensored: true,
-    qualities: { "1k": { cost: 0 }, "2k": { cost: 0 } },
-    engines: { primary: "runware_seedream50pro_uc", backup: null }
   },
   qwenimage30pro: {
     key: "qwenimage30pro",
@@ -329,21 +265,11 @@ const IMAGE_CREDIT_RATES = {
   nanobanana2edit: { "1k": 10, "2k": 15, "4k": 25 },
   edit: { pro: 15 },
   flux2klein9b: { "1k": 2, "2k": 2 },
-  flux2klein4buc: { "1k": 2, "2k": 2 },
   seedream50lite: { "2k": 10 },
   seedream50pro: { "1k": 15, "2k": 25 },
-  seedream50prouc: { "1k": 15, "2k": 25 },
   ponyrealism23: { "1k": 10 },
   cyberpony8: { "1k": 10 },
-  ponysdxl: { "1k": 10 },
-  noobaireal01: { "1k": 10 },
   realismxl: { "1k": 10 },
-  juggernautxl7: { "1k": 10 },
-  realvisxl4: { "1k": 10 },
-  naturalskinxl: { "1k": 10 },
-  flux2photo: { "1k": 20 },
-  fooocusphoto: { "1k": 15 },
-  flux2klein9blf: { "1k": 2 },
   qwenimage30pro: { "1k": 10, "2k": 20 },
   zimageturbo: { "2k": 2 },
   nanobananapro: { "1k": 35, "2k": 35, "4k": 75 },
@@ -2113,67 +2039,6 @@ async function falFluxUltraRealism(
    Requested checker=false is subject to account authorization.
    Neither route guarantees unrestricted content or photo fidelity.
 ========================= */
-async function falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey) {
-  if (qualityKey !== "1k") throw new Error("Unsupported private photo quality");
-  const size = replicatePonySize(ratioKey);
-  let endpoint;
-  let input;
-  if (engine === "fal_flux2_photo") {
-    endpoint = "fal-ai/flux-2";
-    input = {
-      prompt,
-      image_size: size,
-      guidance_scale: 2.5,
-      num_inference_steps: 30,
-      num_images: 1,
-      acceleration: "regular",
-      enable_prompt_expansion: false,
-      enable_safety_checker: true,
-      output_format: "jpeg"
-    };
-  } else if (engine === "fal_fooocus_photo") {
-    endpoint = "fal-ai/fooocus";
-    input = {
-      prompt,
-      negative_prompt: "child, minor, underage, nonconsensual, sexual violence, " +
-        "CGI, 3D render, waxy skin, plastic skin, excessive beauty retouching, " +
-        "oversmoothed skin, distorted anatomy, extra fingers, fused hands, disfigured",
-      styles: ["Fooocus V2", "Fooocus Enhance"],
-      performance: "Quality",
-      guidance_scale: 4,
-      sharpness: 1,
-      aspect_ratio: size.width + "x" + size.height,
-      num_images: 1,
-      refiner_model: "None",
-      output_format: "jpeg",
-      enable_safety_checker: true
-    };
-  } else {
-    throw new Error("Unsupported private photo engine");
-  }
-  let result;
-  try {
-    // The queue provides one submission and polls that same paid job; no retries.
-    result = await falQueueRun(endpoint, input);
-  } catch (err) {
-    // Keep provider response bodies out of logs: they may repeat private prompts.
-    const code = /(?:FAL queue|FAL)\\s+(\\d{3})/.exec(String(err?.message || ""))?.[1];
-    const category = code === "401" || code === "403" ? "account_permission"
-      : code === "422" || code === "400" ? "input_or_policy"
-      : code === "429" ? "rate_limit"
-      : /timed out/.test(String(err?.message || "")) ? "timeout_or_pending"
-      : "provider_failure";
-    console.error("fal_private_photo_failed", JSON.stringify({ engine, code: code || null, category }));
-    throw new Error("FAL experimental photo failed: " + category +
-      (code ? " HTTP " + code : "") + ". Check provider authorization and task history before retrying.");
-  }
-  const url = pickFirstImageUrl(result);
-  if (typeof url !== "string" || !/^https:\/\//.test(url)) {
-    throw new Error("FAL experimental photo returned no usable image URL");
-  }
-  return { url, type: "image", ratio: getRatio(ratioKey).label };
-}
-
 /* =========================
    FAL FLUX PRO 8K
 ========================= */
@@ -2323,18 +2188,6 @@ const REPLICATE_PONY = {
       scheduler: "Euler a", clip_skip: 2, pag_scale: 0,
       guidance_rescale: 2, prepend_preprompt: false }
   },
-  replicate_pony_sdxl: {
-    version: "b070dedae81324788c3c933a5d9e1270093dc74636214b9815dae044b4b3a58a",
-    input: { model: "mklannsfwrealxl2.safetensors", vae: "sdxl-vae-fp16-fix",
-      steps: 35, cfg_scale: 7, scheduler: "DPM++ 2M SDE Karras",
-      guidance_rescale: 0.7, prepend_preprompt: true }
-  },
-  replicate_noobai_real_v01: {
-    version: "06301c13e13b5d6cc7501827f20f3519ef25718edc556df0a5825016439e9346",
-    input: { model: "NoobAI-Realism-SDXL-v0.1", vae: "default",
-      steps: 30, cfg_scale: 5, clip_skip: 2, scheduler: "DPM++ 2M SDE Karras",
-      prepend_preprompt: true }
-  },
   replicate_realism_xl: {
     // asiryan/realism-xl is a community model: Replicate requires a pinned version.
     // Public version page: /asiryan/realism-xl/versions/ff26a1f7...
@@ -2343,38 +2196,6 @@ const REPLICATE_PONY = {
     input: { num_inference_steps: 30, guidance_scale: 7,
       scheduler: "K_EULER_ANCESTRAL", num_outputs: 1 }
   },
-  replicate_juggernaut_xl_v7: {
-    version: "6a52feace43ce1f6bbc2cdabfc68423cb2319d7444a1a1dae529c5e88b976382",
-    input: { num_inference_steps: 40, guidance_scale: 7,
-      scheduler: "K_EULER_ANCESTRAL", num_outputs: 1 }
-  },
-  replicate_realvisxl4: {
-    version: "194f6c32973b10beafa727f3b3a5a9e9336f0656ea6d1a0e25586f4a6865124d",
-    input: { num_inference_steps: 30, guidance_scale: 7, scheduler: "DDIM",
-      number_picture: 1 }
-  },
-  replicate_natural_skin_v4: {
-    // Separate admin-only experiment; DO NOT change the locked Realism XL route.
-    // Replicate's published adirik/realvisxl-v4.0 schema supports this API-only
-    // safety-checker parameter. This is not a guarantee of unrestricted output.
-    version: "85a58cc71587cc27539b7c83eb1ce4aea02feedfb9a9fae0598cebc110a3d695",
-    randomSeedByOmission: true,
-    input: {
-      num_outputs: 1,
-      num_inference_steps: 30,
-      guidance_scale: 2.5,
-      scheduler: "DPM++_SDE_Karras",
-      refine: "no_refiner",
-      apply_watermark: false,
-      disable_safety_checker: true
-    },
-    negativePrompt: [
-      "child", "minor", "underage", "young-looking", "nonconsensual", "sexual violence",
-      "CGI", "3d render", "illustration", "cartoon", "waxy skin", "plastic skin",
-      "airbrushed skin", "oversmoothed skin", "beauty filter", "exaggerated proportions",
-      "bad anatomy", "malformed hands", "extra fingers", "blurred features"
-    ].join(", ")
-  }
 };
 function replicatePonySize(ratioKey) {
   const sizes = {
@@ -3113,11 +2934,8 @@ async function falGPTImage2Generate(
 // Backend-only IDs. Customer rates are centralized; admin generations remain free in bot credits.
 const RUNWARE_MODELS = {
   runware_flux2klein9b: { model: "runware:400@2", steps: 4 },
-  runware_flux2klein9b_lf: { model: "runware:400@2", steps: 4, safetyOff: true },
-  runware_flux2klein4b_uc: { model: "runware:400@4", steps: 4, safetyOff: true },
   runware_seedream50lite: { model: "bytedance:seedream@5.0-lite" },
   runware_seedream50pro: { model: "bytedance:seedream@5.0-pro" },
-  runware_seedream50pro_uc: { model: "bytedance:seedream@5.0-pro", safetyOff: true },
   runware_qwenimage30pro: { model: "alibaba:qwen-image@3.0-pro" },
   runware_zimageturbo: { model: "runware:z-image@turbo", steps: 8 },
   runware_nano_banana_pro: { model: "google:4@2" }
@@ -3169,6 +2987,52 @@ async function runwareRequest(task, timeoutMs) {
     throw new Error(`Image service request failed (HTTP ${response.status})`);
   }
   return response.json();
+}
+
+// Metadata-only discovery; no imageInference and no provider image charge.
+async function runwareCatalogSearch(term, architecture = null) {
+  if (!RUNWARE_API_KEY) throw new Error("Runware is not configured");
+  const query = String(term || "").trim().toLowerCase();
+  if (!["pony", "cyberrealistic", "realistic"].includes(query)) {
+    throw new Error("Unsupported catalog search");
+  }
+  const task = {
+    taskType: "modelSearch", taskUUID: randomUUID(),
+    search: query, category: "checkpoint", visibility: "public",
+    limit: 8, offset: 0
+  };
+  if (architecture) task.architecture = architecture;
+  const response = await runwareRequest(task, 20000);
+  const data = response?.data?.find(x => x.taskType === "modelSearch");
+  if (!data || !Array.isArray(data.results)) throw new Error("Runware catalog returned no valid results");
+  return {
+    total: Number(data.totalResults || 0),
+    models: data.results.slice(0, 8).map(m => ({
+      name: String(m.name || "").slice(0, 70),
+      air: String(m.air || "").slice(0, 110),
+      architecture: String(m.architecture || "unknown").slice(0, 30),
+      version: String(m.version || "").slice(0, 35)
+    }))
+  };
+}
+
+async function adminRunwareCatalog(chatId, args) {
+  const term = String(args || "pony").trim().toLowerCase();
+  const arch = term === "pony" ? "pony" : term === "realistic" ? "sdxl" : null;
+  try {
+    const result = await runwareCatalogSearch(term, arch);
+    const lines = result.models.map(m =>
+      [m.name, "AIR: " + m.air, "Architecture: " + m.architecture,
+        m.version ? "Version: " + m.version : ""].filter(Boolean).join("\n"));
+    return sendMessage(chatId,
+      "🔎 Runware live checkpoint catalog: " + term +
+      "\nMatches: " + result.total +
+      "\n\n" + (lines.join("\n\n") || "No matches found.") +
+      "\n\nMetadata only; licensing, price and adult-use permission are NOT verified.");
+  } catch (err) {
+    console.error("runware_catalog_error", String(err?.message || "").replace(/Bearer\s+[^\s]+/gi, "[redacted]").slice(0, 100));
+    return sendMessage(chatId, "Catalog search unavailable. No image generation was requested.");
+  }
 }
 
 async function runwareGenerate(engine, prompt, qualityKey, ratioKey, extra = {}) {
@@ -3352,10 +3216,6 @@ async function runEngine(
         qualityKey,
         ratioKey
       );
-
-    case "fal_flux2_photo":
-    case "fal_fooocus_photo":
-      return falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey);
 
     case "fal_flux_ultra_realism":
       return falFluxUltraRealism(
@@ -3581,8 +3441,6 @@ function imageKeyboard(userId) {
       ],
       ...(isAdmin(userId) ? [
         [{ text: "🧪 ADULT MODEL RESEARCH • ADMIN", callback_data: "imgcat:uncensored" }],
-        [{ text: "📷 FLUX.2 Dev • FAL photo (non-explicit)", callback_data: "m:flux2photo" }],
-        [{ text: "📷 Fooocus • FAL photo (non-explicit)", callback_data: "m:fooocusphoto" }],
         [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
@@ -3606,14 +3464,9 @@ function imageKeyboard(userId) {
 function uncensoredImageKeyboard() {
   return {
     inline_keyboard: [
+      [{ text: "✅ Realism XL • LOCKED", callback_data: "m:realismxl" }],
       [{ text: "🧪 Pony Realism v2.3 • Replicate", callback_data: "m:ponyrealism23" }],
       [{ text: "🧪 CyberRealistic Pony v8 • Replicate", callback_data: "m:cyberpony8" }],
-      [{ text: "🧪 Pony SDXL • Replicate", callback_data: "m:ponysdxl" }],
-      [{ text: "🧪 NoobAI Real SDXL v0.1 • Replicate", callback_data: "m:noobaireal01" }],
-      [{ text: "✅ Realism XL • LOCKED", callback_data: "m:realismxl" }],
-      [{ text: "🧪 FLUX.2 Klein 9B • Runware approval pending", callback_data: "m:flux2klein9blf" }],
-      [{ text: "🧪 Juggernaut XL v7 • Replicate", callback_data: "m:juggernautxl7" }],
-      [{ text: "🧪 RealVisXL4 • Replicate", callback_data: "m:realvisxl4" }],
       [
         { text: "⬅️ Back", callback_data: "mode:image" },
         { text: "❌ Cancel", callback_data: "x:cancel" }
@@ -3926,10 +3779,6 @@ async function cmdModels(
       "Realism XL (Replicate) • 1K",
       "Juggernaut XL v7 (Replicate) • 1K",
       "RealVisXL4 (Replicate) • 1K",
-      "FLUX.2 Dev FAL non-explicit photo test • 1K",
-      "Fooocus Quality FAL non-explicit photo test • 1K",
-      "FLUX.2 Klein 9B Runware private research • 1K (commercial adult permission not verified)",
-      "Natural Skin XL • archived poor-results route, hidden from menu",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
       "Seedream 5.0 Lite • 2K",
@@ -4920,6 +4769,13 @@ async function onMessage(message) {
       chatId,
       userId
     );
+  }
+
+  if (
+    isAdmin(userId) &&
+    command === "/runwaremodels"
+  ) {
+    return adminRunwareCatalog(chatId, args || "pony");
   }
 
   if (
