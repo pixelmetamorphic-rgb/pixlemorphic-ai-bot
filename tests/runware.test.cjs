@@ -573,13 +573,23 @@ test("three new photoreal experiments are private; failed Natural Skin is hidden
   const menu = h.run("JSON.stringify(uncensoredImageKeyboard())");
   const publicMenu = h.run("JSON.stringify(imageKeyboard(123))");
   for (const key of ["flux2photo","fooocusphoto","flux2klein9blf"]) {
-    assert.ok(menu.includes("m:" + key));
+    if (key === "flux2klein9blf") {
+      assert.ok(menu.includes("m:" + key));
+    } else {
+      assert.ok(!menu.includes("m:" + key),"FAL forbids explicit content; do not list in adult research");
+      assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes(key),
+        "compliant photography test remains in regular admin menu");
+    }
     assert.ok(!publicMenu.includes(key));
     assert.equal(await h.run(`canAccess(123,${JSON.stringify(key)})`), false);
     assert.equal(await h.run(`canAccess("${admin}",${JSON.stringify(key)})`), true);
     assert.deepEqual(Object.keys(h.run(`MODELS[${JSON.stringify(key)}].qualities`)), ["1k"]);
   }
   assert.ok(!menu.includes("m:naturalskinxl"));
+  assert.ok(!menu.includes("m:flux2photo"));
+  assert.ok(!menu.includes("m:fooocusphoto"));
+  assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes("m:flux2photo"));
+  assert.ok(h.run(`JSON.stringify(imageKeyboard("${admin}"))`).includes("m:fooocusphoto"));
   assert.ok(h.run("MODELS.naturalskinxl"));
   assert.ok(menu.includes("m:realismxl"));
   assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
@@ -610,7 +620,7 @@ test("FAL photoreal variants submit one paid job each with documented photo sett
     assert.equal(post.options.headers.Authorization,"Key fal-private-test-secret");
     const input=JSON.parse(post.options.body);
     assert.equal(input.prompt,"a natural photo of a 34 year old adult");
-    assert.equal(input.enable_safety_checker,false);
+    assert.equal(input.enable_safety_checker,true,"fal AUP prohibits explicit content; keep checks on");
     assert.equal(input.num_images,1);
     if(key==="flux2photo") {
       assert.equal(post.url,"https://queue.fal.run/fal-ai/flux-2");
@@ -658,4 +668,19 @@ test("Runware 9B low-filter test uses a separate safety flag without modifying t
   assert.equal(standard.model,"runware:400@2");
   assert.equal(standard.safety,undefined);
   assert.equal(h.requests.length,2);
+});
+
+test("adult-model research makes no false commercial NSFW approval claims", async () => {
+  const h=boot(success);
+  const menu=JSON.stringify(h.run("uncensoredImageKeyboard()"));
+  const publicMenu=JSON.stringify(h.run("imageKeyboard(123)"));
+  const adminMenu=JSON.stringify(h.run(`imageKeyboard("${admin}")`));
+  assert.ok(!publicMenu.includes("imgcat:uncensored"));
+  assert.ok(adminMenu.includes("ADULT MODEL RESEARCH"));
+  assert.ok(!menu.includes("m:flux2photo"));
+  assert.ok(!menu.includes("m:fooocusphoto"));
+  assert.ok(!menu.includes("m:naturalskinxl"));
+  assert.ok(menu.includes("m:realismxl"));
+  assert.equal(h.run("REPLICATE_PONY.replicate_realism_xl.version"),
+    "ff26a1f71bc27f43de016f109135183e0e4902d7cdabbcbb177f4f8817112219");
 });
