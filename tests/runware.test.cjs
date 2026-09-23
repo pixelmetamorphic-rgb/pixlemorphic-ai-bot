@@ -474,5 +474,6 @@ test("catalog search command is admin only; non-admin never sends provider reque
   h.run("sendMessage=async(_chat,text)=>messages.push(text)");
   await h.run('onMessage({chat:{id:123},from:{id:123},text:"/runwaremodels pony"})');
   assert.equal(h.requests.length,0);
-  assert.equal(h.context.messages.length,0);
+  assert.ok(h.context.messages.length>=1,"non-admin receives normal bot response, not catalog data");
+  assert.ok(!h.context.messages.some(m=>String(m).includes("AIR:")));
 });
