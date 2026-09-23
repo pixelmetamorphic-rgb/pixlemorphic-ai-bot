@@ -3056,9 +3056,6 @@ async function runwareGenerate(engine, prompt, qualityKey, ratioKey, extra = {})
     deliveryMethod: "async"
   };
   if (config.steps) task.steps = config.steps;
-  if (config.safetyOff) {
-    task.safety = { checkContent: false };
-  }
   if (extra.imageUrl) task.seedImage = extra.imageUrl;
   const audit = {
     provider: "runware", model: config.model, taskUUID,
