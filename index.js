@@ -2128,7 +2128,7 @@ async function falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey) {
       num_images: 1,
       acceleration: "regular",
       enable_prompt_expansion: false,
-      enable_safety_checker: false,
+      enable_safety_checker: true,
       output_format: "jpeg"
     };
   } else if (engine === "fal_fooocus_photo") {
@@ -2146,7 +2146,7 @@ async function falPrivatePhotoGenerate(engine, prompt, qualityKey, ratioKey) {
       num_images: 1,
       refiner_model: "None",
       output_format: "jpeg",
-      enable_safety_checker: false
+      enable_safety_checker: true
     };
   } else {
     throw new Error("Unsupported private photo engine");
@@ -3580,7 +3580,9 @@ function imageKeyboard(userId) {
         { text: "🧠 GPT Image 2 🧪", callback_data: "m:gptimage2" }
       ],
       ...(isAdmin(userId) ? [
-        [{ text: "🧪 ADULT IMAGE • EXPERIMENTAL", callback_data: "imgcat:uncensored" }],
+        [{ text: "🧪 ADULT MODEL RESEARCH • ADMIN", callback_data: "imgcat:uncensored" }],
+        [{ text: "📷 FLUX.2 Dev • FAL photo (non-explicit)", callback_data: "m:flux2photo" }],
+        [{ text: "📷 Fooocus • FAL photo (non-explicit)", callback_data: "m:fooocusphoto" }],
         [{ text: "🧪 FLUX.2 [klein] 9B", callback_data: "m:flux2klein9b" }],
         [{ text: "🧪 Seedream 5.0 Lite", callback_data: "m:seedream50lite" }],
         [{ text: "🧪 Qwen-Image-3.0-Pro", callback_data: "m:qwenimage30pro" }],
@@ -3609,9 +3611,7 @@ function uncensoredImageKeyboard() {
       [{ text: "🧪 Pony SDXL • Replicate", callback_data: "m:ponysdxl" }],
       [{ text: "🧪 NoobAI Real SDXL v0.1 • Replicate", callback_data: "m:noobaireal01" }],
       [{ text: "✅ Realism XL • LOCKED", callback_data: "m:realismxl" }],
-      [{ text: "📷 FLUX.2 Dev • FAL Photo Test", callback_data: "m:flux2photo" }],
-      [{ text: "📷 Fooocus Quality • FAL Photo Test", callback_data: "m:fooocusphoto" }],
-      [{ text: "🧪 FLUX.2 Klein 9B • Runware Test", callback_data: "m:flux2klein9blf" }],
+      [{ text: "🧪 FLUX.2 Klein 9B • Runware approval pending", callback_data: "m:flux2klein9blf" }],
       [{ text: "🧪 Juggernaut XL v7 • Replicate", callback_data: "m:juggernautxl7" }],
       [{ text: "🧪 RealVisXL4 • Replicate", callback_data: "m:realvisxl4" }],
       [
@@ -3828,7 +3828,7 @@ async function showUncensoredImageMenu(
   if (!isAdmin(userId)) {
     return sendMessage(
       chatId,
-      "🔒 Uncensored Image is currently in private admin testing."
+      "🔒 Adult model research is restricted to admin testing."
     );
   }
 
@@ -3842,7 +3842,7 @@ async function showUncensoredImageMenu(
 
   return sendMessage(
     chatId,
-    "🧪 ADULT IMAGE • EXPERIMENTAL\n\nPrivate admin testing for lawful consenting-adult creative work. No model is verified unrestricted; provider restrictions still apply.\n\nChoose a model:",
+    "🧪 ADULT MODEL RESEARCH • ADMIN ONLY\n\nNo model is yet approved or verified for commercial sexually explicit output. Do not offer these routes to customers. Check model licenses, provider permission and local law before any adult workflow.\n\nChoose a private research model:",
     {
       reply_markup: uncensoredImageKeyboard()
     }
@@ -3918,7 +3918,7 @@ async function cmdModels(
     "",
     ...(isAdmin(userId) ? [
       "🧪 PRIVATE ADMIN TESTS",
-      "🧪 ADULT IMAGE • EXPERIMENTAL",
+      "🧪 ADULT MODEL RESEARCH • NOT CLEARED FOR COMMERCIAL ADULT USE",
       "Pony Realism v2.3 (Replicate) • 1K",
       "CyberRealistic Pony v8 (Replicate) • 1K",
       "Pony SDXL (Replicate) • 1K",
@@ -3926,9 +3926,9 @@ async function cmdModels(
       "Realism XL (Replicate) • 1K",
       "Juggernaut XL v7 (Replicate) • 1K",
       "RealVisXL4 (Replicate) • 1K",
-      "FLUX.2 Dev FAL photo test • 1K (checker off request; approval unknown)",
-      "Fooocus Quality FAL photo test • 1K (checker off request; approval unknown)",
-      "FLUX.2 Klein 9B Runware lower-filter test • 1K",
+      "FLUX.2 Dev FAL non-explicit photo test • 1K",
+      "Fooocus Quality FAL non-explicit photo test • 1K",
+      "FLUX.2 Klein 9B Runware private research • 1K (commercial adult permission not verified)",
       "Natural Skin XL • archived poor-results route, hidden from menu",
       "",
       "FLUX.2 [klein] 9B • 1K / 2K",
