@@ -1703,6 +1703,23 @@ async function claimKlingJob(jobId) {
 async function releaseKlingJobClaim(jobId) {
   if (redis) await redis.del(klingJobLockKey(jobId));
 }
+// Atomic, persistent GLOBAL admin test budget. Reservations remain counted after
+// ambiguous provider errors: never assume a network timeout was unbilled.
+async function reserveKlingTestBudget(estimateUSD) {
+  const costMicros = Math.ceil(estimateUSD * 1000000);
+  const limitMicros = Math.floor(KLING_TEST_MAX_USD * 1000000);
+  if (!redis || costMicros < 1 || limitMicros < costMicros) return false;
+  const script = [
+    "local used=tonumber(redis.call('GET',KEYS[1]) or '0')",
+    "local cap=tonumber(ARGV[1])",
+    "local add=tonumber(ARGV[2])",
+    "if used+add>cap then return 0 end",
+    "redis.call('INCRBY',KEYS[1],add)",
+    "return 1"
+  ].join("\n");
+  return (await redis.eval(script, 1, "kling:admin:total_test_reserved_usd_micro", limitMicros, costMicros)) === 1;
+}
+
 async function submitKlingV3Standard(chatId, userId, flow, prompt) {
   if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is in the admin test area.");
   if (!KLING_T2V_ENABLED || KLING_TEST_MAX_USD <= 0) {
@@ -1717,6 +1734,12 @@ async function submitKlingV3Standard(chatId, userId, flow, prompt) {
   if (!clippedPrompt || !KLING_V3_STANDARD.durations.has(duration) ||
       !KLING_V3_STANDARD.ratios.has(aspectRatio) || estimateUSD > KLING_TEST_MAX_USD) {
     return sendMessage(chatId, "❌ Kling test settings are invalid or exceed the approved test cap. No request was submitted.");
+  }
+  // KLING_TEST_MAX_USD is a cumulative cap across ALL admin test jobs,
+  // not merely a per-request ceiling. Reserve BEFORE any billable HTTP call.
+  // Budget is deliberately not released after uncertain provider failures.
+  if (!(await reserveKlingTestBudget(estimateUSD))) {
+    return sendMessage(chatId, "🛑 Total Kling admin test budget reached. No request was submitted. No automatic budget reset.");
   }
   let submitted;
   try {
@@ -3725,7 +3748,7 @@ async function showKlingVideoMenu(chatId, userId) {
   if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area.");
   await clearFlow(userId);
   const state = KLING_T2V_ENABLED && KLING_TEST_MAX_USD > 0 ? `ON (max $${KLING_TEST_MAX_USD.toFixed(2)})` : "OFF";
-  return sendMessage(chatId, `🎬 KLING LAB • ADMIN ONLY\n\nKling 3.0 Standard text-to-video is prepared with persistent job tracking. Paid test mode: ${state}\n\nChoose the first workflow:`, {
+  return sendMessage(chatId, `🎬 KLING LAB • ADMIN ONLY\n\nKling 3.0 Standard text-to-video is prepared with persistent job tracking. Paid test mode: ${state} (cumulative across all submissions)\n\nChoose the first workflow:`, {
     reply_markup: { inline_keyboard: [
       [{ text: "Kling 3.0 Standard • Text to Video", callback_data: "v:kling:standard" }],
       [{ text: "⬅️ Video Studio", callback_data: "mode:video" }]
