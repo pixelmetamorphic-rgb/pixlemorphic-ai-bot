@@ -3567,19 +3567,67 @@ function ratioKeyboard(
   };
 }
 
+// KLING VIDEO STAGING: verified FAL routes, admin-only price preview.
+// No paid API submission or customer credit deductions in this phase.
+const KLING_VIDEO_DRAFT = Object.freeze({
+  v3standard: { label: "Kling 3.0 Standard", model: "fal-ai/kling-video/v3/standard/text-to-video", rateSilent: 0.084, rateAudio: 0.126, modes: "Text to video" },
+  v3pro: { label: "Kling 3.0 Pro", model: "fal-ai/kling-video/v3/pro/text-to-video", rateSilent: 0.112, rateAudio: 0.168, modes: "Text to video" },
+  o3standard: { label: "Kling O3 Standard", model: "fal-ai/kling-video/o3/standard/text-to-video", rateSilent: 0.084, rateAudio: 0.112, modes: "Text to video" },
+  o3edit: { label: "Kling O3 Edit", model: "fal-ai/kling-video/o3/standard/video-to-video/edit", rateSilent: 0.126, rateAudio: null, modes: "Video to video editing" }
+});
+
+function klingVideoKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "Kling 3.0 Standard", callback_data: "v:kling:v3standard" }],
+    [{ text: "Kling 3.0 Pro", callback_data: "v:kling:v3pro" }],
+    [{ text: "Kling O3 Standard", callback_data: "v:kling:o3standard" }],
+    [{ text: "Kling O3 Edit", callback_data: "v:kling:o3edit" }],
+    [{ text: "⬅️ Video Studio", callback_data: "mode:video" }]
+  ] };
+}
+
+async function showKlingVideoMenu(chatId, userId) {
+  if (String(userId) !== ADMIN_ID) {
+    return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area. No credits charged.");
+  }
+  await clearFlow(userId);
+  return sendMessage(chatId,
+    "🎬 KLING LAB • ADMIN ONLY\\n\\nFAL model routes are mapped for budget review. Select a variant to preview 5s/10s API costs. Generation is NOT active; no API calls or credits are used.",
+    { reply_markup: klingVideoKeyboard() }
+  );
+}
+
+async function showKlingVideoDraft(chatId, userId, variant) {
+  if (String(userId) !== ADMIN_ID) {
+    return sendMessage(chatId, "🔒 Admin test area only. No credits charged.");
+  }
+  const item = Object.hasOwn(KLING_VIDEO_DRAFT, variant) ? KLING_VIDEO_DRAFT[variant] : null;
+  if (!item) return showKlingVideoMenu(chatId, userId);
+  const fmt = (rate, seconds) => rate === null ? "Not separately quoted" : "$" + (rate * seconds).toFixed(3);
+  return sendMessage(chatId,
+    "🎬 " + item.label + "\\n\\nMode: " + item.modes +
+    "\\nFAL: " + item.model +
+    "\\n\\n5s silent: " + fmt(item.rateSilent, 5) +
+    "\\n10s silent: " + fmt(item.rateSilent, 10) +
+    "\\n5s audio: " + fmt(item.rateAudio, 5) +
+    "\\n10s audio: " + fmt(item.rateAudio, 10) +
+    "\\n\\n⚠️ Published API estimate, not a customer credit quote. No requests submitted. Editing prices depend on output duration; source-video constraints apply.",
+    { reply_markup: { inline_keyboard: [[{ text: "⬅️ Kling variants", callback_data: "v:kling:menu" }]] } }
+  );
+}
+
 function videoKeyboard() {
   return {
     inline_keyboard: [
       [{ text: "⚡ Wan 2.2 • COMING SOON", callback_data: "v:soon:wan22" }],
       [{ text: "🎞️ LTX-2 • COMING SOON", callback_data: "v:soon:ltx2" }],
-      [{ text: "🎥 Kling 3.0 • COMING SOON", callback_data: "v:soon:kling3" }],
+      [{ text: "🎥 Kling 3.0 / O3 • ADMIN PREVIEW", callback_data: "v:kling:menu" }],
       [{ text: "🌊 Wan 2.7 • COMING SOON", callback_data: "v:soon:wan27" }],
       [{ text: "🚀 Seedance 2.0 Fast • COMING SOON", callback_data: "v:soon:seedance20fast" }],
       [{ text: "🎬 Seedance 2.0 • COMING SOON", callback_data: "v:soon:seedance20" }],
       [{ text: "🔥 Seedance 2.5 • COMING SOON", callback_data: "v:soon:seedance25" }],
       [{ text: "✨ Gemini Omni 1.1 Flash • COMING SOON", callback_data: "v:soon:geminiomni" }],
       [{ text: "🎥 Veo 3.1 • COMING SOON", callback_data: "v:soon:veo31" }],
-      [{ text: "⚡ Kling 3.0 Turbo Pro • COMING SOON", callback_data: "v:soon:kling3turbo" }],
       [{ text: "⚙️ Video Settings • COMING SOON", callback_data: "v:settings" }],
       [{ text: "⬅️ Back", callback_data: "x:home" }]
     ]
@@ -4347,6 +4395,13 @@ async function onCallback(
       chatId,
       userId
     );
+  }
+
+  if (data === "v:kling:menu") {
+    return showKlingVideoMenu(chatId, userId);
+  }
+  if (data.startsWith("v:kling:")) {
+    return showKlingVideoDraft(chatId, userId, data.slice("v:kling:".length));
   }
 
   if (
