@@ -77,6 +77,21 @@ const FAL_QUEUE_HTTP_TIMEOUT_MS = parseInt(
   10
 );
 
+
+const KLING_T2V_ENABLED = process.env.KLING_T2V_ENABLED === "true";
+const KLING_TEST_MAX_USD = Math.max(0, Number(process.env.KLING_TEST_MAX_USD || 0));
+const KLING_JOB_TTL_SECONDS = 7 * 24 * 60 * 60;
+const KLING_POLL_INTERVAL_MS = Math.max(5000, Number(process.env.KLING_POLL_INTERVAL_MS || 8000));
+const KLING_V3_STANDARD = Object.freeze({
+  key: "v3standard",
+  label: "Kling 3.0 Standard",
+  model: "fal-ai/kling-video/v3/standard/text-to-video",
+  rateSilent: 0.084,
+  rateAudio: 0.126,
+  durations: new Set([3, 5, 10]),
+  ratios: new Set(["16:9", "9:16", "1:1"])
+});
+
 /* =========================
    REDIS
 ========================= */
@@ -1660,6 +1675,122 @@ async function falQueueRun(
       timeoutMs / 1000
     )}s`
   );
+}
+
+
+/* =========================
+   KLING ASYNC JOBS
+========================= */
+
+function klingJobKey(jobId) { return `videojob:kling:${jobId}`; }
+function klingJobLockKey(jobId) { return `videojob:kling:lock:${jobId}`; }
+function klingQuote(duration, audio) {
+  return Number(((audio ? KLING_V3_STANDARD.rateAudio : KLING_V3_STANDARD.rateSilent) * duration).toFixed(3));
+}
+async function saveKlingJob(job) {
+  if (!redis) throw new Error("Redis is required for persistent video jobs");
+  await rSet(klingJobKey(job.id), JSON.stringify(job), KLING_JOB_TTL_SECONDS);
+}
+async function loadKlingJob(jobId) {
+  const raw = await rGet(klingJobKey(jobId));
+  if (!raw) return null;
+  try { return JSON.parse(raw); } catch { return null; }
+}
+async function claimKlingJob(jobId) {
+  if (!redis) return false;
+  return (await redis.set(klingJobLockKey(jobId), "1", "NX", "EX", 60)) === "OK";
+}
+async function releaseKlingJobClaim(jobId) {
+  if (redis) await redis.del(klingJobLockKey(jobId));
+}
+async function submitKlingV3Standard(chatId, userId, flow, prompt) {
+  if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is in the admin test area.");
+  if (!KLING_T2V_ENABLED || KLING_TEST_MAX_USD <= 0) {
+    return sendMessage(chatId, "🚧 Kling setup is ready, but paid testing is OFF. No request was submitted and no credits were charged.");
+  }
+  if (!FAL_API_KEY || !redis) return sendMessage(chatId, "❌ Kling test is not fully configured. No request was submitted.");
+  const duration = Number(flow.duration);
+  const audio = flow.audio === true;
+  const aspectRatio = String(flow.aspectRatio || "16:9");
+  const clippedPrompt = clampPrompt(prompt, 2500);
+  const estimateUSD = klingQuote(duration, audio);
+  if (!clippedPrompt || !KLING_V3_STANDARD.durations.has(duration) ||
+      !KLING_V3_STANDARD.ratios.has(aspectRatio) || estimateUSD > KLING_TEST_MAX_USD) {
+    return sendMessage(chatId, "❌ Kling test settings are invalid or exceed the approved test cap. No request was submitted.");
+  }
+  let submitted;
+  try {
+    submitted = await falQueueJson(`https://queue.fal.run/${KLING_V3_STANDARD.model}`, {
+      method: "POST",
+      body: { prompt: clippedPrompt, duration: String(duration), aspect_ratio: aspectRatio, generate_audio: audio }
+    });
+  } catch (error) {
+    console.error("kling_submit_failed", { message: error?.message });
+    return sendMessage(chatId, "❌ Kling request could not be submitted. No automatic retry was made.");
+  }
+  if (!submitted?.request_id) {
+    console.error("kling_submit_missing_request_id");
+    return sendMessage(chatId, "❌ Kling did not confirm a job ID. No automatic retry was made.");
+  }
+  const id = randomUUID();
+  const baseUrl = `https://queue.fal.run/${KLING_V3_STANDARD.model}/requests/${submitted.request_id}`;
+  const job = {
+    id, provider: "fal", model: KLING_V3_STANDARD.model, requestId: submitted.request_id,
+    statusUrl: submitted.status_url || `${baseUrl}/status`, responseUrl: submitted.response_url || baseUrl,
+    cancelUrl: submitted.cancel_url || `${baseUrl}/cancel`, chatId: String(chatId), userId: String(userId),
+    duration, audio, aspectRatio, estimateUSD, status: "QUEUED", createdAt: Date.now(), updatedAt: Date.now()
+  };
+  await saveKlingJob(job);
+  await clearFlow(userId);
+  return sendMessage(chatId, `🎬 Kling job accepted\n\nJob: ${id.slice(0, 8)}\nMode: Text to video\nDuration: ${duration}s\nAudio: ${audio ? "On" : "Off"}\nRatio: ${aspectRatio}\nTest estimate: $${estimateUSD.toFixed(3)}\n\nI will send the video here when it finishes.`);
+}
+function pickKlingVideo(result) {
+  const video = result?.video || result?.data?.video || result?.response?.video;
+  const url = typeof video === "string" ? video : video?.url;
+  return typeof url === "string" && /^https:\/\//i.test(url) ? url : null;
+}
+async function pollKlingJob(jobId) {
+  if (!(await claimKlingJob(jobId))) return;
+  try {
+    const job = await loadKlingJob(jobId);
+    if (!job || ["DELIVERED", "FAILED", "CANCELED"].includes(job.status)) return;
+    const status = await falQueueJson(job.statusUrl);
+    const state = String(status?.status || "").toUpperCase();
+    job.status = state || "QUEUED";
+    job.updatedAt = Date.now();
+    if (["FAILED", "CANCELED", "CANCELLED"].includes(state)) {
+      job.status = state === "FAILED" ? "FAILED" : "CANCELED";
+      await saveKlingJob(job);
+      await sendMessage(job.chatId, "❌ Kling job did not complete. No retry was made; check the provider receipt before retrying.");
+      return;
+    }
+    if (state !== "COMPLETED") { await saveKlingJob(job); return; }
+    const result = await falQueueJson(job.responseUrl);
+    const videoUrl = pickKlingVideo(result);
+    if (!videoUrl) throw new Error("Kling response did not contain a valid video URL");
+    await telegramRequest("sendVideo", {
+      chat_id: job.chatId, video: videoUrl,
+      caption: `🎬 Kling 3.0 Standard • ${job.duration}s • ${job.aspectRatio} • ${job.audio ? "Audio on" : "Audio off"}`
+    });
+    job.status = "DELIVERED";
+    job.deliveredAt = Date.now();
+    await saveKlingJob(job);
+  } catch (error) {
+    console.error("kling_poll_failed", { jobId, message: error?.message });
+  } finally {
+    await releaseKlingJobClaim(jobId);
+  }
+}
+async function recoverKlingJobs() {
+  if (!redis || !KLING_T2V_ENABLED) return;
+  let cursor = "0";
+  do {
+    const scan = await redis.scan(cursor, "MATCH", "videojob:kling:*", "COUNT", 50);
+    cursor = String(scan?.[0] || "0");
+    for (const key of scan?.[1] || []) {
+      if (!key.includes(":lock:")) await pollKlingJob(key.split(":").pop());
+    }
+  } while (cursor !== "0");
 }
 
 function pickFirstImageUrl(
@@ -3569,69 +3700,60 @@ function ratioKeyboard(
 
 // KLING VIDEO STAGING: verified FAL routes, admin-only price preview.
 // No paid API submission or customer credit deductions in this phase.
-const KLING_VIDEO_DRAFT = Object.freeze({
-  v3standard: { label: "Kling 3.0 Standard", model: "fal-ai/kling-video/v3/standard/text-to-video", rateSilent: 0.084, rateAudio: 0.126, modes: "Text to video" },
-  v3pro: { label: "Kling 3.0 Pro", model: "fal-ai/kling-video/v3/pro/text-to-video", rateSilent: 0.112, rateAudio: 0.168, modes: "Text to video" },
-  o3standard: { label: "Kling O3 Standard", model: "fal-ai/kling-video/o3/standard/text-to-video", rateSilent: 0.084, rateAudio: 0.112, modes: "Text to video" },
-  o3edit: { label: "Kling O3 Edit", model: "fal-ai/kling-video/o3/standard/video-to-video/edit", rateSilent: 0.126, rateAudio: null, modes: "Video to video editing" }
-});
 
-function klingVideoKeyboard() {
+function klingDurationKeyboard() {
   return { inline_keyboard: [
-    [{ text: "Kling 3.0 Standard", callback_data: "v:kling:v3standard" }],
-    [{ text: "Kling 3.0 Pro", callback_data: "v:kling:v3pro" }],
-    [{ text: "Kling O3 Standard", callback_data: "v:kling:o3standard" }],
-    [{ text: "Kling O3 Edit", callback_data: "v:kling:o3edit" }],
+    [{ text: "3 seconds", callback_data: "v:kling:d:3" }, { text: "5 seconds", callback_data: "v:kling:d:5" }],
+    [{ text: "10 seconds", callback_data: "v:kling:d:10" }],
     [{ text: "⬅️ Video Studio", callback_data: "mode:video" }]
   ] };
 }
-
+function klingAudioKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "🔇 Audio Off", callback_data: "v:kling:a:off" }, { text: "🔊 Audio On", callback_data: "v:kling:a:on" }],
+    [{ text: "⬅️ Back", callback_data: "v:kling:standard" }]
+  ] };
+}
+function klingRatioKeyboard() {
+  return { inline_keyboard: [
+    [{ text: "16:9", callback_data: "v:kling:r:16x9" }, { text: "9:16", callback_data: "v:kling:r:9x16" }],
+    [{ text: "1:1", callback_data: "v:kling:r:1x1" }],
+    [{ text: "⬅️ Back", callback_data: "v:kling:standard" }]
+  ] };
+}
 async function showKlingVideoMenu(chatId, userId) {
-  if (String(userId) !== ADMIN_ID) {
-    return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area. No credits charged.");
-  }
+  if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area.");
   await clearFlow(userId);
-  return sendMessage(chatId,
-    "🎬 KLING LAB • ADMIN ONLY\n\nFAL model routes are mapped for budget review. Select a variant to preview 5s/10s API costs. Generation is NOT active; no API calls or credits are used.",
-    { reply_markup: klingVideoKeyboard() }
-  );
+  const state = KLING_T2V_ENABLED && KLING_TEST_MAX_USD > 0 ? `ON (max $${KLING_TEST_MAX_USD.toFixed(2)})` : "OFF";
+  return sendMessage(chatId, `🎬 KLING LAB • ADMIN ONLY\n\nKling 3.0 Standard text-to-video is prepared with persistent job tracking. Paid test mode: ${state}\n\nChoose the first workflow:`, {
+    reply_markup: { inline_keyboard: [
+      [{ text: "Kling 3.0 Standard • Text to Video", callback_data: "v:kling:standard" }],
+      [{ text: "⬅️ Video Studio", callback_data: "mode:video" }]
+    ] }
+  });
 }
-
-async function showKlingVideoDraft(chatId, userId, variant) {
-  if (String(userId) !== ADMIN_ID) {
-    return sendMessage(chatId, "🔒 Admin test area only. No credits charged.");
-  }
-  const item = Object.hasOwn(KLING_VIDEO_DRAFT, variant) ? KLING_VIDEO_DRAFT[variant] : null;
-  if (!item) return showKlingVideoMenu(chatId, userId);
-  const fmt = (rate, seconds) => rate === null ? "Not separately quoted" : "$" + (rate * seconds).toFixed(3);
-  return sendMessage(chatId,
-    "🎬 " + item.label + "\n\nMode: " + item.modes +
-    "\nFAL: " + item.model +
-    "\n\n5s silent: " + fmt(item.rateSilent, 5) +
-    "\n10s silent: " + fmt(item.rateSilent, 10) +
-    "\n5s audio: " + fmt(item.rateAudio, 5) +
-    "\n10s audio: " + fmt(item.rateAudio, 10) +
-    "\n\n⚠️ Published API estimate, not a customer credit quote. No requests submitted. Editing prices depend on output duration; source-video constraints apply.",
-    { reply_markup: { inline_keyboard: [[{ text: "⬅️ Kling variants", callback_data: "v:kling:menu" }]] } }
-  );
+async function beginKlingStandard(chatId, userId) {
+  if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area.");
+  await setFlow(userId, { step: "kling_duration" });
+  return sendMessage(chatId, "🎬 Kling 3.0 Standard\n\nChoose duration:", { reply_markup: klingDurationKeyboard() });
 }
-
-function videoKeyboard() {
-  return {
-    inline_keyboard: [
-      [{ text: "⚡ Wan 2.2 • COMING SOON", callback_data: "v:soon:wan22" }],
-      [{ text: "🎞️ LTX-2 • COMING SOON", callback_data: "v:soon:ltx2" }],
-      [{ text: "🎥 Kling 3.0 / O3 • ADMIN PREVIEW", callback_data: "v:kling:menu" }],
-      [{ text: "🌊 Wan 2.7 • COMING SOON", callback_data: "v:soon:wan27" }],
-      [{ text: "🚀 Seedance 2.0 Fast • COMING SOON", callback_data: "v:soon:seedance20fast" }],
-      [{ text: "🎬 Seedance 2.0 • COMING SOON", callback_data: "v:soon:seedance20" }],
-      [{ text: "🔥 Seedance 2.5 • COMING SOON", callback_data: "v:soon:seedance25" }],
-      [{ text: "✨ Gemini Omni 1.1 Flash • COMING SOON", callback_data: "v:soon:geminiomni" }],
-      [{ text: "🎥 Veo 3.1 • COMING SOON", callback_data: "v:soon:veo31" }],
-      [{ text: "⚙️ Video Settings • COMING SOON", callback_data: "v:settings" }],
-      [{ text: "⬅️ Back", callback_data: "x:home" }]
-    ]
-  };
+function videoKeyboard(userId) {
+  const rows = [
+    [{ text: "⚡ Wan 2.2 • COMING SOON", callback_data: "v:soon:wan22" }],
+    [{ text: "🎞️ LTX-2 • COMING SOON", callback_data: "v:soon:ltx2" }]
+  ];
+  if (isAdmin(userId)) rows.push([{ text: "🎥 Kling 3.0 • ADMIN LAB", callback_data: "v:kling:menu" }]);
+  rows.push(
+    [{ text: "🌊 Wan 2.7 • COMING SOON", callback_data: "v:soon:wan27" }],
+    [{ text: "🚀 Seedance 2.0 Fast • COMING SOON", callback_data: "v:soon:seedance20fast" }],
+    [{ text: "🎬 Seedance 2.0 • COMING SOON", callback_data: "v:soon:seedance20" }],
+    [{ text: "🔥 Seedance 2.5 • COMING SOON", callback_data: "v:soon:seedance25" }],
+    [{ text: "✨ Gemini Omni 1.1 Flash • COMING SOON", callback_data: "v:soon:geminiomni" }],
+    [{ text: "🎥 Veo 3.1 • COMING SOON", callback_data: "v:soon:veo31" }],
+    [{ text: "⚙️ Video Settings • COMING SOON", callback_data: "v:settings" }],
+    [{ text: "⬅️ Back", callback_data: "x:home" }]
+  );
+  return { inline_keyboard: rows };
 }
 
 /* =========================
@@ -3767,7 +3889,7 @@ Video model integration is staged for the next test cycle.
 • Ratio: 16:9 / 9:16 / 1:1 / 4:3 / 3:4 / 21:9
 
 No video credits are consumed while models are marked COMING SOON.`,
-    { reply_markup: videoKeyboard() }
+    { reply_markup: videoKeyboard(userId) }
   );
 }
 
@@ -4397,11 +4519,27 @@ async function onCallback(
     );
   }
 
-  if (data === "v:kling:menu") {
-    return showKlingVideoMenu(chatId, userId);
+  if (data === "v:kling:menu") return showKlingVideoMenu(chatId, userId);
+  if (data === "v:kling:standard") return beginKlingStandard(chatId, userId);
+  if (data.startsWith("v:kling:d:")) {
+    const duration = Number(data.slice("v:kling:d:".length));
+    if (!isAdmin(userId) || !KLING_V3_STANDARD.durations.has(duration)) return;
+    await setFlow(userId, { step: "kling_audio", duration });
+    return sendMessage(chatId, `🎬 Kling 3.0 Standard • ${duration}s\n\nChoose native audio:`, { reply_markup: klingAudioKeyboard() });
   }
-  if (data.startsWith("v:kling:")) {
-    return showKlingVideoDraft(chatId, userId, data.slice("v:kling:".length));
+  if (data.startsWith("v:kling:a:")) {
+    const flow = await getFlow(userId);
+    const audio = data === "v:kling:a:on";
+    if (!isAdmin(userId) || flow?.step !== "kling_audio") return;
+    await setFlow(userId, { step: "kling_ratio", duration: flow.duration, audio });
+    return sendMessage(chatId, `🎬 Kling 3.0 Standard • ${flow.duration}s • ${audio ? "Audio on" : "Audio off"}\n\nChoose ratio:`, { reply_markup: klingRatioKeyboard() });
+  }
+  if (data.startsWith("v:kling:r:")) {
+    const flow = await getFlow(userId);
+    const aspectRatio = ({ "16x9": "16:9", "9x16": "9:16", "1x1": "1:1" })[data.slice("v:kling:r:".length)];
+    if (!isAdmin(userId) || flow?.step !== "kling_ratio" || !KLING_V3_STANDARD.ratios.has(aspectRatio)) return;
+    await setFlow(userId, { step: "await_kling_prompt", duration: flow.duration, audio: flow.audio === true, aspectRatio });
+    return sendMessage(chatId, `✍️ SEND KLING PROMPT\n\nKling 3.0 Standard • ${flow.duration}s • ${flow.audio ? "Audio on" : "Audio off"} • ${aspectRatio}\n\nSend the text prompt. It will be checked against the active test cap before submission.`);
   }
 
   if (
@@ -4746,6 +4884,10 @@ async function onMessage(message) {
     !(await rateLimit(userId))
   ) {
     return;
+  }
+
+  if (currentFlow?.step === "await_kling_prompt") {
+    return submitKlingV3Standard(chatId, userId, currentFlow, text);
   }
 
   const parts =
@@ -5451,6 +5593,8 @@ app.get(
         ),
       globalGenerationLimit:
         GLOBAL_GEN_LIMIT,
+      klingT2vTestEnabled:
+        KLING_T2V_ENABLED && KLING_TEST_MAX_USD > 0,
       time:
         new Date().toISOString()
     });
@@ -5561,6 +5705,13 @@ app.listen(
         REPLICATE_API_TOKEN
       )}`
     );
+    if (KLING_T2V_ENABLED && KLING_TEST_MAX_USD > 0) {
+      console.log(`Kling admin test enabled with cap $${KLING_TEST_MAX_USD.toFixed(2)}`);
+      recoverKlingJobs().catch((error) => console.error("Kling recovery failed:", error?.message));
+      setInterval(() => recoverKlingJobs().catch((error) => console.error("Kling poll failed:", error?.message)), KLING_POLL_INTERVAL_MS).unref();
+    } else {
+      console.log("Kling admin test disabled (no billable requests allowed)");
+    }
   }
 );
 
