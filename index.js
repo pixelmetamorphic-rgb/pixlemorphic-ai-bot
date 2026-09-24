@@ -1767,6 +1767,190 @@ async function submitKlingV3Standard(chatId, userId, flow, prompt) {
   await clearFlow(userId);
   return sendMessage(chatId, `🎬 Kling job accepted\n\nJob: ${id.slice(0, 8)}\nMode: Text to video\nDuration: ${duration}s\nAudio: ${audio ? "On" : "Off"}\nRatio: ${aspectRatio}\nTest estimate: $${estimateUSD.toFixed(3)}\n\nI will send the video here when it finishes.`);
 }
+
+// Additional Kling modes stay ADMIN ONLY and can be stopped independently.
+// They share the existing cumulative KLING_TEST_MAX_USD Redis reservation.
+const KLING_EXTRA_ENABLED = process.env.KLING_EXTRA_ENABLED === "true";
+const KLING_EXTRA_MODES = Object.freeze({
+  i2v: {
+    label: "Kling 3.0 Image to Video", model: "fal-ai/kling-video/v3/standard/image-to-video",
+    kind: "photo", rate: 0.084, minDuration: 3
+  },
+  refimage: {
+    label: "Kling O3 Image Reference", model: "fal-ai/kling-video/o3/standard/reference-to-video",
+    kind: "photo", rate: 0.084, minDuration: 3
+  },
+  refvideo: {
+    label: "Kling O3 Video Reference", model: "fal-ai/kling-video/o3/standard/video-to-video/reference",
+    kind: "video", rate: 0.126, minDuration: 3
+  },
+  edit: {
+    label: "Kling O3 Video Edit", model: "fal-ai/kling-video/o3/standard/video-to-video/edit",
+    kind: "video", rate: 0.126, minDuration: 3
+  }
+});
+const KLING_MEDIA_MAX_BYTES = 19 * 1024 * 1024;
+
+// Fetch Telegram media inside our server, then upload bytes to fal CDN.
+// Never disclose Telegram's bot-token download URL to a third party.
+async function uploadKlingTelegramMedia(fileId, contentType, extension) {
+  const telegramUrl = await tgGetFileUrl(fileId);
+  if (!telegramUrl.startsWith("https://api.telegram.org/file/bot" + TG_TOKEN + "/")) {
+    throw new Error("Unexpected Telegram media URL");
+  }
+  const downloaded = await fetch(telegramUrl, { timeout: 60000 });
+  if (!downloaded.ok) throw new Error("Telegram media download failed");
+  const declaredSize = Number(downloaded.headers.get("content-length") || 0);
+  if (declaredSize > KLING_MEDIA_MAX_BYTES) throw new Error("File exceeds 19MB Telegram limit");
+  const bytes = await downloaded.buffer();
+  if (!bytes.length || bytes.length > KLING_MEDIA_MAX_BYTES) throw new Error("Invalid or oversized media");
+  const fileName = "kling-" + randomUUID() + "." + extension;
+  const initiated = await falQueueJson(
+    "https://rest.fal.ai/storage/upload/initiate?storage_type=fal-cdn-v3",
+    { method: "POST", body: { file_name: fileName, content_type: contentType } }
+  );
+  const uploadUrl = initiated?.upload_url;
+  const fileUrl = initiated?.file_url;
+  if (!/^https:\/\//.test(uploadUrl || "") || !/^https:\/\//.test(fileUrl || "")) {
+    throw new Error("fal storage did not return valid upload URLs");
+  }
+  const host = new URL(uploadUrl).hostname;
+  if (!(host === "fal.media" || host.endsWith(".fal.media") ||
+        host === "fal.ai" || host.endsWith(".fal.ai") ||
+        host === "googleapis.com" || host.endsWith(".googleapis.com") ||
+        host === "cloudflare.com" || host.endsWith(".cloudflare.com"))) {
+    throw new Error("Unexpected fal upload host");
+  }
+  const uploaded = await fetch(uploadUrl, {
+    method: "PUT", body: bytes, headers: { "Content-Type": contentType }, timeout: 120000
+  });
+  if (!uploaded.ok) throw new Error("fal storage upload failed");
+  return fileUrl;
+}
+
+async function beginKlingExtraMode(chatId, userId, mode) {
+  if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Admin-only Kling lab.");
+  const spec = Object.prototype.hasOwnProperty.call(KLING_EXTRA_MODES, mode) ?
+    KLING_EXTRA_MODES[mode] : null;
+  if (!spec) return showKlingVideoMenu(chatId, userId);
+  await setFlow(userId, { step: "await_kling_extra_media", mode });
+  return sendMessage(chatId,
+    "🎬 " + spec.label + "\n\nSend one " +
+    (spec.kind === "photo" ? "photo (JPG/PNG, up to 19MB)" :
+      "Telegram video (MP4/MOV supported by provider; 3–15s; under 19MB)") +
+    ".\n\nAudio off for budget tests. The upload alone does NOT submit a paid generation.");
+}
+
+async function acceptKlingExtraMedia(chatId, userId, flow, media) {
+  if (!isAdmin(userId)) return;
+  const spec = KLING_EXTRA_MODES[flow.mode];
+  if (!spec || media.kind !== spec.kind) {
+    return sendMessage(chatId, "Please send the requested " + (spec?.kind || "media") + " or cancel.");
+  }
+  if (!media.fileId || (media.fileSize && media.fileSize > KLING_MEDIA_MAX_BYTES)) {
+    return sendMessage(chatId, "❌ Invalid file or file over 19MB.");
+  }
+  if (spec.kind === "video" &&
+      (!Number.isInteger(media.duration) || media.duration < 3 || media.duration > 15 ||
+       !["video/mp4", "video/quicktime"].includes(media.mimeType))) {
+    return sendMessage(chatId, "❌ Source must be a Telegram MP4/MOV video of 3–15 seconds (send as video, not document).");
+  }
+  const duration = spec.kind === "video" ? media.duration : 3;
+  const estimate = Number((spec.rate * duration).toFixed(3));
+  await setFlow(userId, {
+    step: "await_kling_extra_prompt", mode: flow.mode, fileId: media.fileId,
+    duration, mimeType: media.mimeType || "image/jpeg",
+    extension: media.mimeType === "video/quicktime" ? "mov" :
+      spec.kind === "video" ? "mp4" : "jpg"
+  });
+  return sendMessage(chatId,
+    "✅ " + spec.label + " media selected.\n" +
+    (spec.kind === "video" ? "Source duration: " + duration + "s\n" :
+      "Default test duration: 3s\n") +
+    "Approximate generation cost: $" + estimate.toFixed(3) +
+    "\n\nNow send your prompt. For references, describe how to use @Image1 or @Video1.\n" +
+    "Submitting the prompt may generate a billable API job ONLY when KLING_EXTRA_ENABLED=true and budget remains.");
+}
+
+async function submitKlingExtraMode(chatId, userId, flow, prompt) {
+  if (!isAdmin(userId)) return;
+  const spec = Object.prototype.hasOwnProperty.call(KLING_EXTRA_MODES, flow.mode) ?
+    KLING_EXTRA_MODES[flow.mode] : null;
+  if (!spec || !flow.fileId) return sendMessage(chatId, "❌ Kling flow expired. Start again.");
+  if (!KLING_EXTRA_ENABLED || !KLING_T2V_ENABLED || KLING_TEST_MAX_USD <= 0) {
+    return sendMessage(chatId, "🚧 Additional Kling paid tests are disabled. Media flow is staged; no API generation submitted.");
+  }
+  if (!redis || !FAL_API_KEY) return sendMessage(chatId, "❌ Kling provider is not configured.");
+  const clippedPrompt = clampPrompt(prompt, 2500);
+  if (!clippedPrompt) return sendMessage(chatId, "Send a nonempty video prompt.");
+  const duration = Number(flow.duration);
+  if (!Number.isInteger(duration) || duration < spec.minDuration || duration > 15)
+    return sendMessage(chatId, "❌ Invalid duration.");
+  const estimateUSD = Number((spec.rate * duration).toFixed(3));
+  if (estimateUSD > KLING_TEST_MAX_USD)
+    return sendMessage(chatId, "🛑 This job exceeds the approved total budget. No job submitted.");
+  const submitLock = "kling:admin:submission_lock:" + userId;
+  if ((await redis.set(submitLock, "1", "NX", "EX", 180)) !== "OK")
+    return sendMessage(chatId, "⏳ Another Kling submission is being prepared. Try later.");
+  try {
+    const mediaUrl = await uploadKlingTelegramMedia(flow.fileId, flow.mimeType, flow.extension);
+    const input = { prompt: clippedPrompt };
+    if (flow.mode === "i2v") {
+      Object.assign(input, { start_image_url: mediaUrl, duration: String(duration),
+        generate_audio: false, aspect_ratio: "16:9" });
+    } else if (flow.mode === "refimage") {
+      Object.assign(input, { image_urls: [mediaUrl], duration: String(duration),
+        generate_audio: false, aspect_ratio: "16:9" });
+      if (!input.prompt.includes("@Image1")) input.prompt = "@Image1 " + input.prompt;
+    } else if (flow.mode === "refvideo") {
+      Object.assign(input, { video_url: mediaUrl, duration: String(duration),
+        keep_audio: false, aspect_ratio: "auto" });
+      if (!input.prompt.includes("@Video1")) input.prompt = "@Video1 " + input.prompt;
+    } else {
+      Object.assign(input, { video_url: mediaUrl, keep_audio: false });
+      if (!input.prompt.includes("@Video1")) input.prompt = "@Video1 " + input.prompt;
+    }
+    // An upload is not a generation. Reserve the GLOBAL budget before
+    // the first potentially billable POST. Ambiguous failures keep the reserve.
+    if (!(await reserveKlingTestBudget(estimateUSD)))
+      return sendMessage(chatId, "🛑 Total Kling test budget exhausted. No paid generation submitted.");
+    let submitted;
+    try {
+      submitted = await falQueueJson("https://queue.fal.run/" + spec.model, {
+        method: "POST", body: input
+      });
+    } catch (error) {
+      console.error("kling_extra_submit_failed", { mode: flow.mode, message: error?.message });
+      await clearFlow(userId);
+      return sendMessage(chatId, "❌ FAL request not confirmed. Budget held for safety; do not retry before reviewing FAL billing.");
+    }
+    if (!submitted?.request_id) {
+      await clearFlow(userId);
+      return sendMessage(chatId, "❌ No provider job ID returned; budget held. No automatic retry.");
+    }
+    const id = randomUUID();
+    const baseUrl = "https://queue.fal.run/" + spec.model + "/requests/" + submitted.request_id;
+    await saveKlingJob({
+      id, provider: "fal", mode: flow.mode, label: spec.label,
+      model: spec.model, requestId: submitted.request_id,
+      statusUrl: submitted.status_url || baseUrl + "/status",
+      responseUrl: submitted.response_url || baseUrl,
+      chatId: String(chatId), userId: String(userId),
+      duration, audio: false, aspectRatio: "16:9", estimateUSD,
+      status: "QUEUED", createdAt: Date.now(), updatedAt: Date.now()
+    });
+    await clearFlow(userId);
+    return sendMessage(chatId, "🎬 " + spec.label + " accepted.\nJob: " +
+      id.slice(0, 8) + "\nBudget reserved: $" + estimateUSD.toFixed(3) +
+      "\nStatus tracked in Redis. No automatic paid retry.");
+  } catch (error) {
+    console.error("kling_extra_preparation_failed", { mode: flow.mode, message: error?.message });
+    return sendMessage(chatId, "❌ Media preparation failed. No generation was submitted unless explicitly reported as accepted.");
+  } finally {
+    await redis.del(submitLock);
+  }
+}
+
 function pickKlingVideo(result) {
   const video = result?.video || result?.data?.video || result?.response?.video;
   const url = typeof video === "string" ? video : video?.url;
@@ -1793,7 +1977,7 @@ async function pollKlingJob(jobId) {
     if (!videoUrl) throw new Error("Kling response did not contain a valid video URL");
     await telegramRequest("sendVideo", {
       chat_id: job.chatId, video: videoUrl,
-      caption: `🎬 Kling 3.0 Standard • ${job.duration}s • ${job.aspectRatio} • ${job.audio ? "Audio on" : "Audio off"}`
+      caption: `🎬 ${job.label || "Kling 3.0 Standard"} • ${job.duration}s • ${job.aspectRatio} • ${job.audio ? "Audio on" : "Audio off"}`
     });
     job.status = "DELIVERED";
     job.deliveredAt = Date.now();
@@ -3748,9 +3932,13 @@ async function showKlingVideoMenu(chatId, userId) {
   if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling is being prepared in the admin test area.");
   await clearFlow(userId);
   const state = KLING_T2V_ENABLED && KLING_TEST_MAX_USD > 0 ? `ON (max $${KLING_TEST_MAX_USD.toFixed(2)})` : "OFF";
-  return sendMessage(chatId, `🎬 KLING LAB • ADMIN ONLY\n\nKling 3.0 Standard text-to-video is prepared with persistent job tracking. Paid test mode: ${state} (cumulative across all submissions)\n\nChoose the first workflow:`, {
+  return sendMessage(chatId, `🎬 KLING LAB • ADMIN ONLY\n\nKling 3.0 Standard text-to-video is prepared with persistent job tracking. Paid test mode: ${state} (cumulative across all submissions)\nExtra modes: ${KLING_EXTRA_ENABLED ? 'ON' : 'OFF'}\n\nChoose the first workflow:`, {
     reply_markup: { inline_keyboard: [
-      [{ text: "Kling 3.0 Standard • Text to Video", callback_data: "v:kling:standard" }],
+      [{ text: "📝 Kling 3.0 • Text to Video", callback_data: "v:kling:standard" }],
+      [{ text: "🖼 Kling 3.0 • Image to Video", callback_data: "v:kling:mode:i2v" }],
+      [{ text: "🎨 Kling O3 • Image Reference", callback_data: "v:kling:mode:refimage" }],
+      [{ text: "🎞 Kling O3 • Video Reference", callback_data: "v:kling:mode:refvideo" }],
+      [{ text: "✏️ Kling O3 • Video Edit", callback_data: "v:kling:mode:edit" }],
       [{ text: "⬅️ Video Studio", callback_data: "mode:video" }]
     ] }
   });
@@ -4544,6 +4732,9 @@ async function onCallback(
 
   if (data === "v:kling:menu") return showKlingVideoMenu(chatId, userId);
   if (data === "v:kling:standard") return beginKlingStandard(chatId, userId);
+  if (data.startsWith("v:kling:mode:")) {
+    return beginKlingExtraMode(chatId, userId, data.slice("v:kling:mode:".length));
+  }
   if (data.startsWith("v:kling:d:")) {
     const duration = Number(data.slice("v:kling:d:".length));
     if (!isAdmin(userId) || !KLING_V3_STANDARD.durations.has(duration)) return;
@@ -4837,6 +5028,23 @@ async function onMessage(message) {
       userId
     );
 
+  if (currentFlow?.step === "await_kling_extra_media") {
+    const photo = message.photo?.[message.photo.length - 1];
+    const video = message.video;
+    if (photo) {
+      return acceptKlingExtraMedia(chatId, userId, currentFlow, {
+        kind: "photo", fileId: photo.file_id, fileSize: photo.file_size || 0,
+        mimeType: "image/jpeg"
+      });
+    }
+    if (video) {
+      return acceptKlingExtraMedia(chatId, userId, currentFlow, {
+        kind: "video", fileId: video.file_id, fileSize: video.file_size || 0,
+        duration: video.duration, mimeType: video.mime_type || "video/mp4"
+      });
+    }
+    return sendMessage(chatId, "📎 Send the required image or source video first.");
+  }
   if (message.photo?.length) {
     if (
       currentFlow?.step !==
@@ -4911,6 +5119,9 @@ async function onMessage(message) {
 
   if (currentFlow?.step === "await_kling_prompt") {
     return submitKlingV3Standard(chatId, userId, currentFlow, text);
+  }
+  if (currentFlow?.step === "await_kling_extra_prompt") {
+    return submitKlingExtraMode(chatId, userId, currentFlow, text);
   }
 
   const parts =
