@@ -1855,6 +1855,8 @@ async function submitKlingV3Standard(chatId, userId, flow, prompt) {
   if (!(await reserveKlingTestBudget(estimateUSD))) {
     return sendMessage(chatId, "🛑 Total Kling admin test budget reached. No request was submitted. No automatic budget reset.");
   }
+  // Prevent a repeated prompt from resubmitting after an ambiguous paid error.
+  await clearFlow(userId);
   let submitted;
   try {
     submitted = await falQueueJson(`https://queue.fal.run/${KLING_V3_STANDARD.model}`, {
@@ -1881,6 +1883,79 @@ async function submitKlingV3Standard(chatId, userId, flow, prompt) {
   await clearFlow(userId);
   return sendMessage(chatId, `🎬 Kling job accepted\n\nJob: ${id.slice(0, 8)}\nMode: Text to video\nDuration: ${duration}s\nAudio: ${audio ? "On" : "Off"}\nRatio: ${aspectRatio}\nTest estimate: $${estimateUSD.toFixed(3)}\n\nI will send the video here when it finishes.`);
 }
+
+async function submitKlingMediaJob(chatId, userId, flow) {
+  if (!isAdmin(userId)) return sendMessage(chatId, "🔒 Kling testing is admin-only.");
+  if (!KLING_T2V_ENABLED || !KLING_MEDIA_TEST_ENABLED || KLING_TEST_MAX_USD <= 0) {
+    return sendMessage(chatId, "🚧 Kling media mode is configured, but paid media tests are OFF. No job submitted.");
+  }
+  if (!redis || !FAL_API_KEY) return sendMessage(chatId, "❌ FAL and Redis must be configured.");
+  const spec = KLING_MEDIA_MODES[flow?.mode];
+  const duration = Number(flow?.duration);
+  const audio = flow?.audio === true;
+  const prompt = clampPrompt(flow?.prompt, 2500);
+  const estimateUSD = klingModeQuote(flow?.mode, duration, audio);
+  const expectedPrefix = klingMediaOrigin() + "/kling-media/";
+  if (!spec || !prompt || !flow?.mediaUrl?.startsWith(expectedPrefix) ||
+      !estimateUSD || estimateUSD > KLING_TEST_MAX_USD) {
+    return sendMessage(chatId, "🛑 Invalid Kling settings or test quote exceeds the approved cumulative cap.");
+  }
+  // Check that a six-hour media reference has not expired before submitting.
+  const token = flow.mediaUrl.slice(expectedPrefix.length);
+  if (!/^[0-9a-f-]{36}$/.test(token) || !(await rGet("kling:media:" + token))) {
+    await clearFlow(userId);
+    return sendMessage(chatId, "⌛ Uploaded media expired. Open Kling and upload it again.");
+  }
+  const lock = "kling:submit:lock:" + String(userId);
+  if (await redis.set(lock, "1", "NX", "EX", 180) !== "OK") {
+    return sendMessage(chatId, "⏳ Your Kling job is already being submitted. Avoid double-clicking.");
+  }
+  try {
+    if (!(await reserveKlingTestBudget(estimateUSD))) {
+      return sendMessage(chatId, "🛑 Total Kling testing budget exhausted. No provider call made.");
+    }
+    // Clear before calling FAL: failed/ambiguous HTTP must never allow a
+    // second submission simply by resending the prompt or pressing Generate.
+    await clearFlow(userId);
+    let submitted;
+    try {
+      submitted = await falQueueJson("https://queue.fal.run/" + spec.model, {
+        method: "POST", body: klingModeInput(flow.mode, flow, prompt)
+      });
+    } catch (error) {
+      console.error("kling_media_submit_ambiguous", { mode: flow.mode, message: error?.message });
+      return sendMessage(chatId,
+        "❌ Provider did not confirm the job. Budget remains reserved; check FAL billing before retrying.");
+    }
+    if (!submitted?.request_id) {
+      console.error("kling_media_missing_request_id", { mode: flow.mode });
+      return sendMessage(chatId, "⚠️ Provider response had no task ID. No automatic retry. Verify billing.");
+    }
+    const id = randomUUID();
+    const root = "https://queue.fal.run/" + spec.model + "/requests/" + submitted.request_id;
+    const job = {
+      id, provider: "fal", model: spec.model, label: spec.title, mode: flow.mode,
+      requestId: submitted.request_id, statusUrl: submitted.status_url || root + "/status",
+      responseUrl: submitted.response_url || root, cancelUrl: submitted.cancel_url || root + "/cancel",
+      chatId: String(chatId), userId: String(userId), duration, audio,
+      aspectRatio: spec.fileType === "image" ? "input image / 16:9" : "source video",
+      estimateUSD, status: "QUEUED", createdAt: Date.now(), updatedAt: Date.now()
+    };
+    try {
+      await saveKlingJob(job);
+    } catch (error) {
+      console.error("kling_media_orphaned_fal_request",
+        { mode: flow.mode, requestId: submitted.request_id, message: error?.message });
+      return sendMessage(chatId, "⚠️ FAL accepted the video, but job persistence failed. Do not retry; inspect Railway logs.");
+    }
+    return sendMessage(chatId, "🎬 " + spec.title + " accepted.\n\nJob " +
+      id.slice(0, 8) + " • " + duration + "s\nBudget reserved $" +
+      estimateUSD.toFixed(3) + "\n\nThe bot will deliver the result here when complete.");
+  } finally {
+    await redis.del(lock);
+  }
+}
+
 function pickKlingVideo(result) {
   const video = result?.video || result?.data?.video || result?.response?.video;
   const url = typeof video === "string" ? video : video?.url;
@@ -1907,7 +1982,7 @@ async function pollKlingJob(jobId) {
     if (!videoUrl) throw new Error("Kling response did not contain a valid video URL");
     await telegramRequest("sendVideo", {
       chat_id: job.chatId, video: videoUrl,
-      caption: `🎬 Kling 3.0 Standard • ${job.duration}s • ${job.aspectRatio} • ${job.audio ? "Audio on" : "Audio off"}`
+      caption: `${job.label || "Kling 3.0 Standard"} • ${job.duration}s • ${job.aspectRatio} • ${job.audio ? "Audio on" : "Audio off"}`
     });
     job.status = "DELIVERED";
     job.deliveredAt = Date.now();
