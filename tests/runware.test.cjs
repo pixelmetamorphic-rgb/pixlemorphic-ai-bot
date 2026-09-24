@@ -491,3 +491,6 @@ test("Kling is admin-only and disabled by default, so prompt submission cannot c
   assert.equal(h.requests.length, 0);
   assert.match(h.context.messages.at(-1), /No request was submitted/);
 });
+
+// Include isolated Kling mode safety regression under existing CI command.
+require('./kling-modes.test.cjs');
