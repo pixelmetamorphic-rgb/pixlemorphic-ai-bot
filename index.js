@@ -96,6 +96,38 @@ const KLING_V3_STANDARD = Object.freeze({
    REDIS
 ========================= */
 
+
+// Media tests default OFF, independently of existing text-to-video permissions.
+const KLING_MEDIA_TEST_ENABLED = process.env.KLING_MEDIA_TEST_ENABLED === "true";
+const KLING_MEDIA_MAX_BYTES = 20 * 1024 * 1024;
+const KLING_MEDIA_TTL_SECONDS = 6 * 60 * 60;
+const KLING_MEDIA_MODES = Object.freeze({
+  i2v: Object.freeze({
+    title: "Kling 3.0 Image to Video",
+    model: "fal-ai/kling-video/v3/standard/image-to-video",
+    fileType: "image", rateSilent: 0.084, rateAudio: 0.126,
+    supportsAudio: true, needsDuration: true
+  }),
+  refimage: Object.freeze({
+    title: "Kling O3 Reference Image to Video",
+    model: "fal-ai/kling-video/o3/standard/reference-to-video",
+    fileType: "image", rateSilent: 0.084, rateAudio: 0.112,
+    supportsAudio: true, needsDuration: true
+  }),
+  refvideo: Object.freeze({
+    title: "Kling O3 Reference Video to Video",
+    model: "fal-ai/kling-video/o3/standard/video-to-video/reference",
+    fileType: "video", rateSilent: 0.126, rateAudio: null,
+    supportsAudio: false, needsDuration: true
+  }),
+  edit: Object.freeze({
+    title: "Kling O3 Video Editing",
+    model: "fal-ai/kling-video/o3/standard/video-to-video/edit",
+    fileType: "video", rateSilent: 0.126, rateAudio: null,
+    supportsAudio: false, needsDuration: false
+  })
+});
+
 let redis = null;
 
 if (REDIS_URL) {
@@ -1718,6 +1750,88 @@ async function reserveKlingTestBudget(estimateUSD) {
     "return 1"
   ].join("\n");
   return (await redis.eval(script, 1, "kling:admin:total_test_reserved_usd_micro", limitMicros, costMicros)) === 1;
+}
+
+
+function klingMediaOrigin() {
+  const origin = new URL(process.env.KLING_MEDIA_ORIGIN ||
+    process.env.WEBHOOK_URL ||
+    "https://pixlemorphic-ai-bot-production.up.railway.app").origin;
+  if (!origin.startsWith("https://")) throw new Error("Kling requires an HTTPS public origin");
+  return origin;
+}
+function klingModeQuote(mode, duration, audio) {
+  const spec = KLING_MEDIA_MODES[mode];
+  if (!spec || !Number.isInteger(duration) || duration < 3 || duration > 15) return null;
+  if (audio && !spec.supportsAudio) return null;
+  return Number(((audio ? spec.rateAudio : spec.rateSilent) * duration).toFixed(3));
+}
+function klingModeInput(mode, flow, prompt) {
+  const base = { prompt };
+  const duration = String(flow.duration);
+  if (mode === "i2v") return {
+    ...base, start_image_url: flow.mediaUrl,
+    duration, generate_audio: flow.audio === true
+  };
+  if (mode === "refimage") return {
+    ...base, image_urls: [flow.mediaUrl],
+    duration, generate_audio: flow.audio === true, aspect_ratio: "16:9"
+  };
+  if (mode === "refvideo") return {
+    ...base, video_url: flow.mediaUrl,
+    duration, keep_audio: false, aspect_ratio: "auto"
+  };
+  if (mode === "edit") return {
+    ...base, video_url: flow.mediaUrl, keep_audio: false
+  };
+  throw new Error("Unknown Kling media mode");
+}
+// Telegram file URLs include TG_TOKEN; never submit them directly to any provider.
+// Store ONLY Telegram file IDs in Redis and expose an unguessable six-hour relay.
+async function createKlingMediaUrl(fileId, kind, bytes, mime) {
+  if (!redis || !TG_TOKEN) throw new Error("Telegram and Redis are required");
+  if (!fileId || !["image", "video"].includes(kind) ||
+      !Number.isInteger(bytes) || bytes <= 0 || bytes > KLING_MEDIA_MAX_BYTES) {
+    throw new Error("Media type or size is unsupported (20 MB maximum)");
+  }
+  const file = await telegramRequest("getFile", { file_id: fileId });
+  if (!file?.file_path || (file.file_size || bytes) > KLING_MEDIA_MAX_BYTES) {
+    throw new Error("Telegram could not provide the requested file");
+  }
+  const token = randomUUID();
+  await rSet("kling:media:" + token,
+    JSON.stringify({ fileId, kind, bytes, mime }), KLING_MEDIA_TTL_SECONDS);
+  return klingMediaOrigin() + "/kling-media/" + token;
+}
+async function handleKlingMediaRelay(req, res) {
+  const token = String(req.params.token || "");
+  res.set("Cache-Control", "private, no-store");
+  res.set("X-Robots-Tag", "noindex, nofollow");
+  if (!/^[0-9a-f-]{36}$/.test(token)) return res.sendStatus(404);
+  try {
+    const raw = await rGet("kling:media:" + token);
+    if (!raw) return res.sendStatus(404);
+    const item = JSON.parse(raw);
+    if (!item?.fileId || !["image", "video"].includes(item.kind)) return res.sendStatus(404);
+    const file = await telegramRequest("getFile", { file_id: item.fileId });
+    if (!file?.file_path || (file.file_size || item.bytes) > KLING_MEDIA_MAX_BYTES) {
+      return res.sendStatus(413);
+    }
+    res.set("Content-Type", item.mime);
+    if (req.method === "HEAD") return res.status(200).end();
+    const safePath = String(file.file_path).split("/").map(encodeURIComponent).join("/");
+    const remote = await fetch("https://api.telegram.org/file/bot" + TG_TOKEN + "/" + safePath,
+      { redirect: "error", timeout: 60000 });
+    if (!remote.ok) return res.sendStatus(502);
+    const length = Number(remote.headers.get("content-length") || 0);
+    if (length > KLING_MEDIA_MAX_BYTES) return res.sendStatus(413);
+    if (length > 0) res.set("Content-Length", String(length));
+    remote.body.on("error", err => { console.error("kling_media_stream_error", err.message); res.destroy(); });
+    return remote.body.pipe(res);
+  } catch (error) {
+    console.error("kling_media_relay_error", error?.message);
+    return res.headersSent ? res.destroy() : res.sendStatus(502);
+  }
 }
 
 async function submitKlingV3Standard(chatId, userId, flow, prompt) {
@@ -5401,6 +5515,7 @@ async function handleAdmin(
 ========================= */
 
 app.get("/download/:token", handlePrivateDownload);
+app.get("/kling-media/:token", handleKlingMediaRelay);
 
 app.get(
   "/",
