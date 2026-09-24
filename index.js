@@ -3592,7 +3592,7 @@ async function showKlingVideoMenu(chatId, userId) {
   }
   await clearFlow(userId);
   return sendMessage(chatId,
-    "🎬 KLING LAB • ADMIN ONLY\\n\\nFAL model routes are mapped for budget review. Select a variant to preview 5s/10s API costs. Generation is NOT active; no API calls or credits are used.",
+    "🎬 KLING LAB • ADMIN ONLY\n\nFAL model routes are mapped for budget review. Select a variant to preview 5s/10s API costs. Generation is NOT active; no API calls or credits are used.",
     { reply_markup: klingVideoKeyboard() }
   );
 }
@@ -3605,13 +3605,13 @@ async function showKlingVideoDraft(chatId, userId, variant) {
   if (!item) return showKlingVideoMenu(chatId, userId);
   const fmt = (rate, seconds) => rate === null ? "Not separately quoted" : "$" + (rate * seconds).toFixed(3);
   return sendMessage(chatId,
-    "🎬 " + item.label + "\\n\\nMode: " + item.modes +
-    "\\nFAL: " + item.model +
-    "\\n\\n5s silent: " + fmt(item.rateSilent, 5) +
-    "\\n10s silent: " + fmt(item.rateSilent, 10) +
-    "\\n5s audio: " + fmt(item.rateAudio, 5) +
-    "\\n10s audio: " + fmt(item.rateAudio, 10) +
-    "\\n\\n⚠️ Published API estimate, not a customer credit quote. No requests submitted. Editing prices depend on output duration; source-video constraints apply.",
+    "🎬 " + item.label + "\n\nMode: " + item.modes +
+    "\nFAL: " + item.model +
+    "\n\n5s silent: " + fmt(item.rateSilent, 5) +
+    "\n10s silent: " + fmt(item.rateSilent, 10) +
+    "\n5s audio: " + fmt(item.rateAudio, 5) +
+    "\n10s audio: " + fmt(item.rateAudio, 10) +
+    "\n\n⚠️ Published API estimate, not a customer credit quote. No requests submitted. Editing prices depend on output duration; source-video constraints apply.",
     { reply_markup: { inline_keyboard: [[{ text: "⬅️ Kling variants", callback_data: "v:kling:menu" }]] } }
   );
 }
