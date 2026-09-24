@@ -1,3 +1,5 @@
+> **Current direction (25 September 2026):** Image Studio is frozen while video development is the priority. The current roadmap and next action are in [PROJECT_HANDOFF.md](PROJECT_HANDOFF.md): review Kling PR #18, then implement admin-only Kling 3.0 Standard text-to-video with persistent job tracking. Do not run paid tests or change customer credit prices without explicit approval.
+
 # PIXLEMORPHIC bot — continuation checkpoint
 Updated 2026-09-22. Read this and current index.js before continuing.
 
