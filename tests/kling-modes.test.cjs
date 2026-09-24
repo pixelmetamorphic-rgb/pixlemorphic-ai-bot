@@ -42,6 +42,6 @@ test("additional modes cannot charge with extra-mode kill switch OFF", async () 
 test("old $0.50 shared budget guard still exists", () => {
   assert.match(source, /reserveKlingTestBudget\(estimateUSD\)/);
   assert.match(source, /kling:admin:total_test_reserved_usd_micro/);
-  assert.match(source, /KLING_EXTRA_ENABLED &&?/);
+  assert.match(source, /!KLING_EXTRA_ENABLED/);
   assert.match(source, /videojob:kling:/);
 });
