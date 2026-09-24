@@ -477,3 +477,17 @@ test("catalog search command is admin only; non-admin never sends provider reque
   assert.ok(h.context.messages.length>=1,"non-admin receives normal bot response, not catalog data");
   assert.ok(!h.context.messages.some(m=>String(m).includes("AIR:")));
 });
+
+
+test("Kling is admin-only and disabled by default, so prompt submission cannot create a billable job", async () => {
+  const h = boot(success);
+  h.context.messages = [];
+  h.run("sendMessage = async (_chat, text) => messages.push(text)");
+  assert.ok(!h.run("JSON.stringify(videoKeyboard(123))").includes("v:kling:menu"));
+  assert.ok(h.run(`JSON.stringify(videoKeyboard("${admin}"))`).includes("v:kling:menu"));
+  await h.run(`showKlingVideoMenu(1, "${admin}")`);
+  assert.match(h.context.messages.at(-1), /Paid test mode: OFF/);
+  await h.run(`submitKlingV3Standard(1, "${admin}", { duration: 3, audio: false, aspectRatio: "16:9" }, "a calm sunset over a lake")`);
+  assert.equal(h.requests.length, 0);
+  assert.match(h.context.messages.at(-1), /No request was submitted/);
+});
