@@ -5060,15 +5060,15 @@ async function onMessage(message) {
       const mime = String(document.mime_type || "").toLowerCase();
       const filename = String(document.file_name || "").toLowerCase();
       const isVideo = ["video/mp4", "video/quicktime"].includes(mime) ||
-        (/\\.(mp4|mov)$/.test(filename) && (!mime || mime === "application/octet-stream"));
+        (/\.(mp4|mov)$/.test(filename) && (!mime || mime === "application/octet-stream"));
       const isImage = ["image/jpeg", "image/png"].includes(mime) ||
-        (/\\.(jpg|jpeg|png)$/.test(filename) && (!mime || mime === "application/octet-stream"));
+        (/\.(jpg|jpeg|png)$/.test(filename) && (!mime || mime === "application/octet-stream"));
       if (isVideo || isImage) {
         return acceptKlingExtraMedia(chatId, userId, currentFlow, {
           kind: isVideo ? "video" : "photo",
           fileId: document.file_id, fileSize: document.file_size || 0,
           duration: null,
-          mimeType: isVideo ? (/\\.mov$/.test(filename) || mime === "video/quicktime" ?
+          mimeType: isVideo ? (/\.mov$/.test(filename) || mime === "video/quicktime" ?
             "video/quicktime" : "video/mp4") : mime === "image/png" ? "image/png" : "image/jpeg"
         });
       }
