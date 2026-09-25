@@ -1851,9 +1851,21 @@ async function acceptKlingExtraMedia(chatId, userId, flow, media) {
     return sendMessage(chatId, "❌ Invalid file or file over 19MB.");
   }
   if (spec.kind === "video" &&
-      (!Number.isInteger(media.duration) || media.duration < 3 || media.duration > 15 ||
-       !["video/mp4", "video/quicktime"].includes(media.mimeType))) {
-    return sendMessage(chatId, "❌ Source must be a Telegram MP4/MOV video of 3–15 seconds (send as video, not document).");
+      !["video/mp4", "video/quicktime"].includes(media.mimeType)) {
+    return sendMessage(chatId, "❌ Send an MP4/MOV video, either as a video or as a file.");
+  }
+  if (spec.kind === "video" && media.duration == null) {
+    await setFlow(userId, {
+      step: "await_kling_extra_duration", mode: flow.mode, fileId: media.fileId,
+      mimeType: media.mimeType,
+      extension: media.mimeType === "video/quicktime" ? "mov" : "mp4"
+    });
+    return sendMessage(chatId,
+      "✅ Video file received. Telegram did not provide its duration. Reply with the source video duration in whole seconds (3–15). No generation has been submitted.");
+  }
+  if (spec.kind === "video" &&
+      (!Number.isInteger(media.duration) || media.duration < 3 || media.duration > 15)) {
+    return sendMessage(chatId, "❌ Source video must be 3–15 seconds.");
   }
   const duration = spec.kind === "video" ? media.duration : 3;
   const estimate = Number((spec.rate * duration).toFixed(3));
@@ -5043,7 +5055,26 @@ async function onMessage(message) {
         duration: video.duration, mimeType: video.mime_type || "video/mp4"
       });
     }
-    return sendMessage(chatId, "📎 Send the required image or source video first.");
+    const document = message.document;
+    if (document) {
+      const mime = String(document.mime_type || "").toLowerCase();
+      const filename = String(document.file_name || "").toLowerCase();
+      const isVideo = ["video/mp4", "video/quicktime"].includes(mime) ||
+        (/\\.(mp4|mov)$/.test(filename) && (!mime || mime === "application/octet-stream"));
+      const isImage = ["image/jpeg", "image/png"].includes(mime) ||
+        (/\\.(jpg|jpeg|png)$/.test(filename) && (!mime || mime === "application/octet-stream"));
+      if (isVideo || isImage) {
+        return acceptKlingExtraMedia(chatId, userId, currentFlow, {
+          kind: isVideo ? "video" : "photo",
+          fileId: document.file_id, fileSize: document.file_size || 0,
+          duration: null,
+          mimeType: isVideo ? (/\\.mov$/.test(filename) || mime === "video/quicktime" ?
+            "video/quicktime" : "video/mp4") : mime === "image/png" ? "image/png" : "image/jpeg"
+        });
+      }
+      return sendMessage(chatId, "❌ Unsupported file. Send JPG/PNG or MP4/MOV (under 19MB).");
+    }
+    return sendMessage(chatId, "📎 Send the required image or source video first. MP4/MOV files are supported.");
   }
   if (message.photo?.length) {
     if (
@@ -5117,6 +5148,20 @@ async function onMessage(message) {
     return;
   }
 
+  if (currentFlow?.step === "await_kling_extra_duration") {
+    if (!/^(?:[3-9]|1[0-5])$/.test(text)) {
+      return sendMessage(chatId, "❌ Reply with the actual source duration as a whole number from 3 to 15 seconds. No generation submitted.");
+    }
+    const duration = Number(text);
+    const spec = KLING_EXTRA_MODES[currentFlow.mode];
+    if (!spec || spec.kind !== "video" || !currentFlow.fileId) {
+      return sendMessage(chatId, "❌ Video flow expired. Start again.");
+    }
+    await setFlow(userId, { ...currentFlow, step: "await_kling_extra_prompt", duration });
+    return sendMessage(chatId, "✅ Source duration: " + duration +
+      "s. Estimated generation cost: $" + (spec.rate * duration).toFixed(3) +
+      ". Now send your prompt. A prompt submission may start a billable job, subject to the cumulative test cap.");
+  }
   if (currentFlow?.step === "await_kling_prompt") {
     return submitKlingV3Standard(chatId, userId, currentFlow, text);
   }
